@@ -1,0 +1,230 @@
+"use client";
+
+import clsx from "clsx";
+import { motion } from "framer-motion";
+import {
+  CircleStop,
+  Cpu,
+  Hash,
+  KeyRound,
+  Pause,
+  Play,
+  Rocket,
+  Workflow,
+} from "lucide-react";
+import { useState } from "react";
+import type { RunSummary, StatusInfo } from "@/lib/types";
+
+export function HeroPanel({
+  status,
+  run,
+  onStart,
+  onPause,
+  onResume,
+  onAbort,
+}: {
+  status: StatusInfo | null;
+  run: RunSummary | null;
+  onStart: (req: {
+    chapter_num: number;
+    chapter_title: string;
+    auto_run: boolean;
+    mode: "live" | "mock";
+  }) => void;
+  onPause: () => void;
+  onResume: () => void;
+  onAbort: () => void;
+}) {
+  const [chapterNum, setChapterNum] = useState(1);
+  const [chapterTitle, setChapterTitle] = useState("少年入门");
+  const [autoRun, setAutoRun] = useState(true);
+  const [mode, setMode] = useState<"live" | "mock">("mock");
+
+  const isRunning = run && (run.status === "running" || run.status === "paused");
+
+  return (
+    <div className="panel-glow relative p-5 md:p-6">
+      <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Workflow size={14} className="text-cyan-300" />
+            <span className="font-mono text-[11px] uppercase tracking-[0.24em] text-cyan-300">
+              Novel Agents · Pipeline Console
+            </span>
+          </div>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight md:text-3xl">
+            <span className="grad-text">6 个 Agent</span>{" "}
+            <span className="text-slate-100">协作创作一章玄幻修仙</span>
+          </h1>
+          <p className="mt-1 max-w-xl text-[13px] text-slate-400">
+            策划 → 世界观 → 写作 → 审校 → 润色 → 读者模拟。
+            每一次 LLM 调用、工具调用、token 消耗都会被实时留痕。
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="badge border-cyan-300/30 bg-cyan-400/10 text-cyan-200">
+              <Cpu size={11} /> Claude × DeepSeek 混合
+            </span>
+            <span className="badge border-indigo-300/30 bg-indigo-400/10 text-indigo-200">
+              <Workflow size={11} /> CrewAI 编排
+            </span>
+            <span
+              className={clsx(
+                "badge",
+                status?.has_api_key
+                  ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-200"
+                  : "border-amber-300/30 bg-amber-400/10 text-amber-200"
+              )}
+            >
+              <KeyRound size={11} />
+              {status?.has_api_key ? "APIMart Key 已配置" : "未配置 Key · 演示模式"}
+            </span>
+            <span className="badge border-slate-400/30 bg-white/5 text-slate-300">
+              <Hash size={11} /> 章节 {status?.chapters_count ?? 0} 已完成
+            </span>
+          </div>
+        </div>
+
+        <div className="grid w-full max-w-md grid-cols-2 gap-2 md:w-auto">
+          <Field label="章节号">
+            <input
+              type="number"
+              min={1}
+              value={chapterNum}
+              onChange={(e) => setChapterNum(parseInt(e.target.value || "1"))}
+              className="bg-transparent text-sm font-mono text-slate-100 w-full outline-none"
+            />
+          </Field>
+          <Field label="标题">
+            <input
+              type="text"
+              value={chapterTitle}
+              onChange={(e) => setChapterTitle(e.target.value)}
+              className="bg-transparent text-sm text-slate-100 w-full outline-none"
+            />
+          </Field>
+          <Field label="模式">
+            <select
+              value={mode}
+              onChange={(e) => setMode(e.target.value as any)}
+              className="bg-transparent text-sm text-slate-100 w-full outline-none"
+            >
+              <option value="mock" className="bg-ink-900">
+                演示模式 (Mock)
+              </option>
+              <option value="live" className="bg-ink-900">
+                实跑 (Live)
+              </option>
+            </select>
+          </Field>
+          <Field label="运行方式">
+            <button
+              onClick={() => setAutoRun((v) => !v)}
+              className="text-left w-full text-sm text-slate-100 outline-none"
+            >
+              {autoRun ? "自动连续" : "在 写手/润色 暂停"}
+            </button>
+          </Field>
+
+          <div className="col-span-2 mt-1 flex items-center gap-2">
+            {!isRunning && (
+              <motion.button
+                whileTap={{ scale: 0.97 }}
+                onClick={() =>
+                  onStart({
+                    chapter_num: chapterNum,
+                    chapter_title: chapterTitle,
+                    auto_run: autoRun,
+                    mode,
+                  })
+                }
+                className="btn-primary flex-1"
+              >
+                <Rocket size={14} /> 启动 6-Agent 流水线
+              </motion.button>
+            )}
+            {isRunning && run?.status !== "paused" && (
+              <button onClick={onPause} className="btn-ghost flex-1">
+                <Pause size={14} /> 暂停
+              </button>
+            )}
+            {isRunning && run?.status === "paused" && (
+              <button onClick={onResume} className="btn-primary flex-1">
+                <Play size={14} /> 继续
+              </button>
+            )}
+            {isRunning && (
+              <button onClick={onAbort} className="btn-danger">
+                <CircleStop size={14} /> 终止
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {run && (
+        <div className="relative mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <MetricTile label="本次 Token" value={run.total_tokens.toLocaleString()} accent="text-cyan-300" />
+          <MetricTile
+            label="输入 / 输出"
+            value={`${run.total_prompt_tokens.toLocaleString()} / ${run.total_completion_tokens.toLocaleString()}`}
+          />
+          <MetricTile label="LLM 调用次数" value={String(run.total_llm_calls)} />
+          <MetricTile
+            label="运行状态"
+            value={STATUS_LABEL[run.status] || run.status}
+            accent={STATUS_TONE[run.status]}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const STATUS_LABEL: Record<string, string> = {
+  queued: "排队中",
+  running: "运行中",
+  paused: "已暂停",
+  completed: "✓ 完成",
+  aborted: "已终止",
+  error: "异常",
+};
+
+const STATUS_TONE: Record<string, string> = {
+  running: "text-cyan-300",
+  paused: "text-amber-300",
+  completed: "text-emerald-300",
+  aborted: "text-rose-300",
+  error: "text-rose-300",
+};
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+      <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
+        {label}
+      </div>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  );
+}
+
+function MetricTile({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-slate-500">
+        {label}
+      </div>
+      <div className={clsx("mt-1 font-mono text-xl tabular-nums text-slate-100", accent)}>
+        {value}
+      </div>
+    </div>
+  );
+}

@@ -17,6 +17,10 @@ dependencies = [
     "click",
     "python-dotenv",
     "sentence-transformers",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "websockets",
 ]
 
 [project.optional-dependencies]
