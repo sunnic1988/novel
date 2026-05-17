@@ -135,9 +135,16 @@ def serve(host: str, port: int, reload: bool):
     """启动仪表盘后端 API（FastAPI + WebSocket）"""
     import uvicorn
 
-    console.print(Panel(f"[bold cyan]🚀 启动 Agent 仪表盘 API[/]\n→ http://{host}:{port}", expand=False))
+    banner = f"[bold cyan]🚀 启动 Agent 仪表盘 API[/]\n→ http://{host}:{port}"
+    console.print(Panel(banner, expand=False))
     if reload:
-        uvicorn.run("novel_agents.server.app:create_app", host=host, port=port, reload=True, factory=True)
+        uvicorn.run(
+            "novel_agents.server.app:create_app",
+            host=host,
+            port=port,
+            reload=True,
+            factory=True,
+        )
     else:
         from novel_agents.server.app import create_app
 

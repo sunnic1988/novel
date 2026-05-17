@@ -24,7 +24,10 @@ MOCK_OUTPUTS: dict[str, list[str]] = {
     "planner": [
         "本章核心事件：少年陈尘在乱葬岗目睹师兄陨落，意外得到一枚残破玉简。",
         "情绪曲线设计：压抑（蹲守）→ 紧张（追杀）→ 暴怒（师兄陨落）→ 破釜沉舟。",
-        "Beats: 1) 黄昏乱葬岗蹲守; 2) 师兄重伤逃来; 3) 黑袍人追至; 4) 师兄交付玉简; 5) 少年怒夺玉简; 6) 玉简共鸣识主。",
+        (
+            "Beats: 1) 黄昏乱葬岗蹲守; 2) 师兄重伤逃来; 3) 黑袍人追至; "
+            "4) 师兄交付玉简; 5) 少年怒夺玉简; 6) 玉简共鸣识主。"
+        ),
         "钩子：玉简中传来一道沙哑笑声——'小子，可愿拜我为师？'",
     ],
     "world_builder": [
@@ -44,7 +47,10 @@ MOCK_OUTPUTS: dict[str, list[str]] = {
         "总分：43/50",
         "叙事逻辑 5/5 · 人物一致性 5/5 · 设定连贯 4/5 · 场景执行 5/5 · 节奏 4/5",
         "对话质量 4/5 · 描写质量 5/5 · 去AI味 4/5 · 钩子 5/5 · 信息密度 4/5",
-        "可优化：第 3 个场景中『噬魂幡』描写略平，建议加 1-2 句声效或寒意；段末『比泪更烫的东西』节奏可再短一拍。",
+        (
+            "可优化：第 3 个场景中『噬魂幡』描写略平，建议加 1-2 句声效或寒意；"
+            "段末『比泪更烫的东西』节奏可再短一拍。"
+        ),
         "结论：通过（建议轻度润色）。",
     ],
     "polisher": [
@@ -219,7 +225,10 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
     await _emit(
         run.run_id,
         "run_started",
-        message=f"开始创作第 {run.chapter_num} 章 「{run.chapter_title or '未命名'}」 (mode={run.mode})",
+        message=(
+            f"开始创作第 {run.chapter_num} 章 "
+            f"「{run.chapter_title or '未命名'}」 (mode={run.mode})"
+        ),
         data={"chapter_num": run.chapter_num, "title": run.chapter_title, "mode": run.mode},
     )
 
@@ -361,8 +370,11 @@ async def _execute_mock_agent(
         run.run_id,
         "agent_completed",
         agent=agent.id,
-        message=f"{agent.name} 完成（用时 {(agent.completed_at - (agent.started_at or 0)) / 1000:.1f}s, "
-        f"token {agent.total_tokens:,}）",
+        message=(
+            f"{agent.name} 完成（用时 "
+            f"{(agent.completed_at - (agent.started_at or 0)) / 1000:.1f}s, "
+            f"token {agent.total_tokens:,}）"
+        ),
         data={
             "output_preview": agent.output_preview,
             "total_tokens": agent.total_tokens,
