@@ -153,9 +153,12 @@ def run_chapter_pipeline(
             "5. 修炼/突破场面要有仪式感\n"
             "6. 章末必须有强力钩子\n"
             "7. 字数控制在2000-3000字\n"
-            "8. 用中文写作，输出纯正文（不要元描述）"
+            "8. 用中文写作，输出纯正文（不要元描述）\n\n"
+            "重要：你已经通过上下文获得了所有需要的信息。"
+            "请直接开始写作，不需要再查阅任何资料。"
+            "你的输出必须是纯章节正文内容，不要包含任何思考过程或工具调用。"
         ),
-        expected_output="2000-3000字的章节正文，中文，符合修仙网文风格",
+        expected_output="2000-3000字的章节正文，中文，纯故事内容，不含任何元描述或工具调用格式",
         agent=writer,
         context=[plan_task, worldbuild_task],
     )
@@ -235,6 +238,7 @@ def run_chapter_pipeline(
         tasks=[plan_task, worldbuild_task, write_task, review_task, polish_task, reader_task],
         process=Process.sequential,
         verbose=True,
+        max_rpm=30,
     )
 
     console.print("\n[bold green]🚀 开始执行创作流水线...[/]\n")

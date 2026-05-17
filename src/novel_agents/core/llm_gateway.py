@@ -27,9 +27,17 @@ class APIMartLLM(LLM):
         available_functions: list[dict] | None = None,
         **kwargs: Any,
     ) -> str:
+        # APIMart的Claude端点不支持assistant message prefill
+        # 如果最后一条消息是assistant角色，需要移除（CrewAI内部行为）
+        cleaned_messages = list(messages)
+        while cleaned_messages and cleaned_messages[-1].get("role") == "assistant":
+            cleaned_messages.pop()
+        if not cleaned_messages:
+            cleaned_messages = messages
+
         params: dict[str, Any] = {
             "model": self.model,
-            "messages": messages,
+            "messages": cleaned_messages,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
             "stream": True,

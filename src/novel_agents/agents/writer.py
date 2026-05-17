@@ -3,9 +3,6 @@
 from crewai import Agent
 
 from novel_agents.core.llm_gateway import LLM_ASSIGNMENT
-from novel_agents.tools.bible_tool import BibleReaderTool
-from novel_agents.tools.chapter_context_tool import ChapterContextTool
-from novel_agents.tools.reference_tool import ReferenceSearchTool
 
 
 def create_writer() -> Agent:
@@ -25,9 +22,10 @@ def create_writer() -> Agent:
             "你深知网文读者的阅读节奏：开头抓眼球、中间有起伏、结尾有悬念。"
             "你写的每一句话都经过推敲，绝不出现'总之'、'综上'等AI八股词。"
             "你的文风会根据故事圣经中的文风指南进行调整，适应不同作品的风格。"
+            "你收到任务后直接开始写作，不会反复查阅资料。"
         ),
-        tools=[BibleReaderTool(), ChapterContextTool(), ReferenceSearchTool()],
         llm=LLM_ASSIGNMENT["writer"](),
         verbose=True,
         memory=True,
+        max_iter=5,
     )
