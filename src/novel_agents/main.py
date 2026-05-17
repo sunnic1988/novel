@@ -1,4 +1,4 @@
-"""CLI入口 — 修仙小说多Agent创作系统"""
+"""CLI入口 — 玄幻修仙多Agent创作系统"""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 @click.group()
 def cli():
-    """🏔️ 修仙小说多Agent创作系统 — 凡人修仙传同人二创"""
+    """🏔️ 玄幻修仙多Agent创作系统"""
     pass
 
 
@@ -30,7 +30,7 @@ def write(chapter_num: int, title: str, max_rounds: int):
     """创作指定章节（触发完整流水线）"""
     from novel_agents.core.orchestrator import run_chapter_pipeline
 
-    console.print(Panel("[bold cyan]🏔️ 修仙小说多Agent创作系统启动[/]", expand=False))
+    console.print(Panel("[bold cyan]🏔️ 玄幻修仙多Agent创作系统启动[/]", expand=False))
     run_chapter_pipeline(chapter_num, title, max_rounds)
     console.print("\n[bold green]创作完成！[/]")
 

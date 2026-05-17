@@ -1,6 +1,6 @@
 ## Cursor Cloud specific instructions
 
-这是一个基于 CrewAI 的多Agent协作修仙小说创作系统，专为《凡人修仙传》同人二创设计。
+这是一个基于 CrewAI 的多Agent协作玄幻修仙创作系统，支持各类修仙/仙侠/玄幻题材。
 
 ### 技术栈
 

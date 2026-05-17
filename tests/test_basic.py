@@ -19,7 +19,7 @@ def test_bible_files_exist():
     """验证故事圣经文件存在"""
     assert (PROJECT_ROOT / "bible" / "style_guide.md").exists()
     assert (PROJECT_ROOT / "bible" / "power_system.md").exists()
-    assert (PROJECT_ROOT / "bible" / "characters" / "韩立.md").exists()
+    assert (PROJECT_ROOT / "bible" / "characters" / "主角模板.md").exists()
 
 
 def test_reference_files_exist():
@@ -80,7 +80,7 @@ def test_bible_reader_tool():
 
     tool = BibleReaderTool()
     result = tool._run("characters")
-    assert "韩立" in result
+    assert "姓名" in result or "主角" in result
 
     result = tool._run("power_system")
     assert "练气期" in result
