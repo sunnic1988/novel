@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Novel project specific
+.chroma_db/
+.env
+output/
+*.egg-info/
+.pytest_cache/
+chapters/ch*.md
+reviews/ch*.md
+plans/ch*-plan.md
