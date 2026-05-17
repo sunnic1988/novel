@@ -75,9 +75,9 @@ class APIMartLLM(LLM):
 
 
 def get_creative_llm() -> APIMartLLM:
-    """创意写作LLM（Claude Sonnet 4.5） — 用于 Writer、Polisher"""
+    """创意写作LLM（Claude Sonnet 4.6） — 用于 Writer、Polisher"""
     return APIMartLLM(
-        model="openai/claude-sonnet-4-5-20250929",
+        model="openai/claude-sonnet-4-6",
         temperature=0.85,
         max_tokens=8192,
         api_key=_get_api_key(),
