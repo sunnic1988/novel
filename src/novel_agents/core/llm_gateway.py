@@ -86,9 +86,9 @@ def get_creative_llm() -> APIMartLLM:
 
 
 def get_analytical_llm() -> APIMartLLM:
-    """分析推理LLM（DeepSeek V3.2） — 用于 Planner、WorldBuilder、Reviewer、ReaderSim"""
+    """分析推理LLM（DeepSeek V4 Pro） — 用于 Planner、WorldBuilder、Reviewer、ReaderSim"""
     return APIMartLLM(
-        model="openai/deepseek-v3.2",
+        model="openai/deepseek-v4-pro",
         temperature=0.4,
         max_tokens=8192,
         api_key=_get_api_key(),
