@@ -16,9 +16,9 @@
 # 安装依赖
 pip install -e ".[dev]"
 
-# 配置API密钥
+# 配置API密钥（使用APIMart聚合平台，一个Key访问所有模型）
 cp .env.example .env
-# 编辑 .env，填入 ANTHROPIC_API_KEY 和 DEEPSEEK_API_KEY
+# 编辑 .env，填入 APIMART_API_KEY（从 https://apimart.ai/keys 获取）
 
 # 初始化项目
 novel init
@@ -37,12 +37,14 @@ novel write 1 -t "少年入门"
 
 | Agent | 角色 | 使用模型 | 职责 |
 |-------|------|---------|------|
-| 策划师 | Planner | DeepSeek | 场景beats、节奏曲线、钩子设计 |
-| 世界观师 | WorldBuilder | DeepSeek | 设定管理、人物卡、力量体系 |
-| 写手 | Writer | Claude | 章节正文撰写 |
-| 审校师 | Reviewer | DeepSeek | 十维度质量审查 |
-| 润色师 | Polisher | Claude | 去AI味、语言精修 |
-| 读者模拟 | ReaderSim | DeepSeek | 模拟目标读者反馈 |
+| 策划师 | Planner | DeepSeek V3.1 | 场景beats、节奏曲线、钩子设计 |
+| 世界观师 | WorldBuilder | DeepSeek V3.1 | 设定管理、人物卡、力量体系 |
+| 写手 | Writer | Claude Sonnet 4.5 | 章节正文撰写 |
+| 审校师 | Reviewer | DeepSeek V3.1 | 十维度质量审查 |
+| 润色师 | Polisher | Claude Sonnet 4.5 | 去AI味、语言精修 |
+| 读者模拟 | ReaderSim | DeepSeek V3.1 | 模拟目标读者反馈 |
+
+> 所有模型通过 [APIMart](https://apimart.ai) API聚合平台统一调用，只需一个API Key。
 
 ## 项目结构
 
@@ -72,4 +74,4 @@ novel/
 - **添加角色**：在 `bible/characters/` 下创建 `.md` 文件
 - **添加范文**：在 `references/` 下添加 `.md` 或 `.txt` 文件，运行 `novel ingest`
 - **修改大纲**：编辑 `plans/synopsis.md`
-- **调整LLM**：修改 `src/novel_agents/core/llm_gateway.py`
+- **调整LLM**：修改 `src/novel_agents/core/llm_gateway.py`（可切换APIMart支持的任何模型）

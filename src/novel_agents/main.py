@@ -110,10 +110,8 @@ def status():
     # 检查LLM配置
     import os
 
-    has_anthropic = bool(os.getenv("ANTHROPIC_API_KEY"))
-    has_deepseek = bool(os.getenv("DEEPSEEK_API_KEY"))
-    table.add_row("Claude API", "✅ 已配置" if has_anthropic else "⚠️ 未配置")
-    table.add_row("DeepSeek API", "✅ 已配置" if has_deepseek else "⚠️ 未配置")
+    has_apimart = bool(os.getenv("APIMART_API_KEY"))
+    table.add_row("APIMart API", "✅ 已配置" if has_apimart else "⚠️ 未配置")
 
     console.print(table)
 
@@ -149,7 +147,7 @@ def init():
 
     console.print("\n[bold green]项目初始化完成！[/]")
     console.print("[cyan]下一步：[/]")
-    console.print("  1. 在 .env 中配置 ANTHROPIC_API_KEY 和 DEEPSEEK_API_KEY")
+    console.print("  1. 在 .env 中配置 APIMART_API_KEY（从 https://apimart.ai/keys 获取）")
     console.print("  2. 编辑 plans/synopsis.md 填写故事大纲")
     console.print("  3. 在 bible/characters/ 中添加角色卡片")
     console.print("  4. 运行 novel ingest 导入参考范文")

@@ -1,28 +1,35 @@
-"""LLM网关 — Claude + DeepSeek 混用配置"""
+"""LLM网关 — 通过 APIMart API聚合平台统一调用 Claude + DeepSeek"""
 
 import os
 
 from crewai import LLM
 
+APIMART_BASE_URL = "https://api.apimart.ai/v1"
+
+
+def _get_api_key() -> str:
+    return os.getenv("APIMART_API_KEY", "")
+
 
 def get_creative_llm() -> LLM:
-    """创意写作LLM（Claude） — 用于 Writer、Polisher"""
+    """创意写作LLM（Claude Sonnet 4.5） — 用于 Writer、Polisher"""
     return LLM(
-        model="anthropic/claude-sonnet-4-20250514",
+        model="openai/claude-sonnet-4-5-20250929",
         temperature=0.85,
         max_tokens=8192,
-        api_key=os.getenv("ANTHROPIC_API_KEY", ""),
+        api_key=_get_api_key(),
+        base_url=APIMART_BASE_URL,
     )
 
 
 def get_analytical_llm() -> LLM:
-    """分析推理LLM（DeepSeek） — 用于 Planner、WorldBuilder、Reviewer、ReaderSim"""
+    """分析推理LLM（DeepSeek V3.1） — 用于 Planner、WorldBuilder、Reviewer、ReaderSim"""
     return LLM(
-        model="deepseek/deepseek-chat",
+        model="openai/deepseek-v3.1-250821",
         temperature=0.4,
         max_tokens=8192,
-        api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+        api_key=_get_api_key(),
+        base_url=APIMART_BASE_URL,
     )
 
 
