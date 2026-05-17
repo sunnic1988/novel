@@ -128,6 +128,23 @@ def status():
 
 
 @cli.command()
+@click.option("--host", default="127.0.0.1", help="监听地址")
+@click.option("--port", "-p", default=8765, type=int, help="监听端口")
+@click.option("--reload", is_flag=True, help="代码改动时自动重载")
+def serve(host: str, port: int, reload: bool):
+    """启动仪表盘后端 API（FastAPI + WebSocket）"""
+    import uvicorn
+
+    console.print(Panel(f"[bold cyan]🚀 启动 Agent 仪表盘 API[/]\n→ http://{host}:{port}", expand=False))
+    if reload:
+        uvicorn.run("novel_agents.server.app:create_app", host=host, port=port, reload=True, factory=True)
+    else:
+        from novel_agents.server.app import create_app
+
+        uvicorn.run(create_app(), host=host, port=port)
+
+
+@cli.command()
 def init():
     """初始化项目（创建必要目录和模板文件）"""
     dirs = [

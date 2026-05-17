@@ -219,6 +219,7 @@ __marimo__/
 
 # Novel project specific
 .chroma_db/
+.traces/
 .env
 output/
 *.egg-info/
@@ -226,3 +227,9 @@ output/
 chapters/ch*.md
 reviews/ch*.md
 plans/ch*-plan.md
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo/

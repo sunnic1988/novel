@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #04060f;
+  color: #e2e8f0;
+  font-feature-settings: "cv02", "cv11";
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 18% -10%, rgba(56, 189, 248, 0.16), transparent 55%),
+    radial-gradient(circle at 90% 0%, rgba(99, 102, 241, 0.18), transparent 60%),
+    radial-gradient(circle at 60% 120%, rgba(34, 211, 238, 0.12), transparent 60%),
+    linear-gradient(180deg, #04060f 0%, #050a1c 100%);
+  min-height: 100vh;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/10 bg-white/[0.03] backdrop-blur-xl shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)];
+  }
+  .panel-glow {
+    @apply panel relative overflow-hidden;
+  }
+  .panel-glow::before {
+    content: "";
+    @apply absolute inset-0 pointer-events-none opacity-60;
+    background:
+      radial-gradient(circle at 30% 0%, rgba(59, 130, 246, 0.18), transparent 50%),
+      radial-gradient(circle at 100% 100%, rgba(34, 211, 238, 0.12), transparent 50%);
+  }
+  .grad-text {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-cyan-300 via-sky-300 to-indigo-300;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-all
+      disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-primary {
+    @apply btn bg-gradient-to-r from-brand-500 to-cyber-cyan text-white shadow-[0_8px_30px_-10px_rgba(56,189,248,0.6)] hover:shadow-[0_10px_36px_-8px_rgba(56,189,248,0.9)] hover:-translate-y-[1px];
+  }
+  .btn-ghost {
+    @apply btn bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-200;
+  }
+  .btn-danger {
+    @apply btn bg-rose-500/10 border border-rose-400/30 text-rose-200 hover:bg-rose-500/20;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.25);
+    border-radius: 999px;
+  }
+}
+
+.shimmer-line {
+  background: linear-gradient(
+    90deg,
+    rgba(56, 189, 248, 0) 0%,
+    rgba(56, 189, 248, 0.4) 50%,
+    rgba(56, 189, 248, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2.4s linear infinite;
+}
