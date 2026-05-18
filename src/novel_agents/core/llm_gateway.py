@@ -105,10 +105,13 @@ def get_analytical_llm() -> APIMartLLM:
 
 
 LLM_ASSIGNMENT = {
+    "arc_architect": get_analytical_llm,
+    "pacing_doctor": get_analytical_llm,
     "planner": get_analytical_llm,
     "world_builder": get_analytical_llm,
     "writer": get_creative_llm,
     "reviewer": get_analytical_llm,
     "polisher": get_creative_llm,
     "reader_sim": get_analytical_llm,
+    "marketing_specialist": get_creative_llm,
 }

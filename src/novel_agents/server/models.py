@@ -9,24 +9,38 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 AgentId = Literal[
+    "arc_architect",
     "planner",
+    "pacing_doctor",
     "world_builder",
     "writer",
     "reviewer",
     "polisher",
     "reader_sim",
+    "marketing_specialist",
 ]
 
 AGENT_ORDER: list[AgentId] = [
+    "arc_architect",
     "planner",
+    "pacing_doctor",
     "world_builder",
     "writer",
     "reviewer",
     "polisher",
     "reader_sim",
+    "marketing_specialist",
 ]
 
 AGENT_META: dict[AgentId, dict[str, Any]] = {
+    "arc_architect": {
+        "name": "卷纲架构师",
+        "role": "ArcArchitect",
+        "color": "#0ea5e9",
+        "model_kind": "analytical",
+        "uses_references": False,
+        "icon": "Layers",
+    },
     "planner": {
         "name": "策划师",
         "role": "Planner",
@@ -34,6 +48,14 @@ AGENT_META: dict[AgentId, dict[str, Any]] = {
         "model_kind": "analytical",
         "uses_references": True,
         "icon": "Compass",
+    },
+    "pacing_doctor": {
+        "name": "节奏医生",
+        "role": "PacingDoctor",
+        "color": "#14b8a6",
+        "model_kind": "analytical",
+        "uses_references": False,
+        "icon": "Activity",
     },
     "world_builder": {
         "name": "世界观师",
@@ -74,6 +96,14 @@ AGENT_META: dict[AgentId, dict[str, Any]] = {
         "model_kind": "analytical",
         "uses_references": False,
         "icon": "Users",
+    },
+    "marketing_specialist": {
+        "name": "营销专家",
+        "role": "MarketingSpecialist",
+        "color": "#f472b6",
+        "model_kind": "creative",
+        "uses_references": True,
+        "icon": "Megaphone",
     },
 }
 
@@ -143,6 +173,10 @@ class StartRunRequest(BaseModel):
     auto_run: bool = True
     mode: Literal["live", "mock"] = "mock"
     synopsis_override: str = ""
+    is_opening: bool = False
+    best_of_n: int = 1
+    enabled_agents: list[str] | None = None  # None 表示全启用
+    budget_usd: float | None = None  # 单次 run 的预算上限
 
 
 class InterventionRequest(BaseModel):
@@ -153,3 +187,53 @@ class InterventionRequest(BaseModel):
 class ReferenceCreateRequest(BaseModel):
     filename: str
     content: str
+
+
+class ForeshadowingItem(BaseModel):
+    id: str | None = None
+    title: str
+    planted_chapter: int
+    planned_payoff_chapter: int | None = None
+    payoff_chapter: int | None = None
+    status: Literal["planted", "payoff_due", "paid_off", "dropped"] = "planted"
+    importance: Literal["high", "medium", "low"] = "medium"
+    description: str = ""
+    related_characters: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class FeedbackItem(BaseModel):
+    chapter: int
+    text: str
+
+
+class TitleCandidate(BaseModel):
+    title: str
+    angle: str = ""
+    score: float = 0.0
+
+
+class SynopsisRequest(BaseModel):
+    text: str
+
+
+class BudgetCheckRequest(BaseModel):
+    budget_usd: float | None = None
+
+
+class HighlightItem(BaseModel):
+    chapter: int
+    text: str
+    tag: str = ""
+    score: float = 0.0
+
+
+class CharacterRuntimeUpdate(BaseModel):
+    name: str
+    chapter: int
+    realm: str | None = None
+    mood: str | None = None
+    knot: str | None = None
+    key_relations: list[str] = Field(default_factory=list)
+    status: str | None = None
+    notes: str | None = None

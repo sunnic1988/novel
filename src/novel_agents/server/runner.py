@@ -1,4 +1,8 @@
-"""Run 生命周期管理 — 启动 / 暂停 / 干预 / 终止 6 Agent 流水线"""
+"""Run 生命周期管理 — 启动 / 暂停 / 干预 / 终止 9 Agent 流水线
+
+Mock 模式下每轮 run 会同步生成一份完整的「章节副产物包」：
+KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint / 章节摘要 / 简介候选 / 成本估算。
+"""
 
 from __future__ import annotations
 
@@ -8,7 +12,37 @@ import random
 import uuid
 from typing import Any
 
+from novel_agents.book import (
+    character_runtime,
+    feedback,
+    foreshadowing,
+    highlights,
+    summaries,
+)
+from novel_agents.book import (
+    cost as cost_mod,
+)
+from novel_agents.book import (
+    kpi as kpi_mod,
+)
+from novel_agents.book import (
+    titles as titles_mod,
+)
+from novel_agents.book.ai_taste import analyze as ai_taste_analyze
+from novel_agents.book.paths import ai_lint_path, ensure_dirs
 from novel_agents.server.events import bus
+from novel_agents.server.mock_data import (
+    MOCK_AI_LINT_SAMPLE,
+    MOCK_CHARACTER_UPDATES,
+    MOCK_FORESHADOWING_PLANTS,
+    MOCK_HIGHLIGHTS,
+    MOCK_OUTPUTS,
+    MOCK_STEPS,
+    MOCK_SUMMARY,
+    MOCK_SYNOPSIS_CANDIDATES,
+    MOCK_TITLE_CANDIDATES,
+    randomize_kpi,
+)
 from novel_agents.server.models import (
     AGENT_META,
     AGENT_ORDER,
@@ -19,60 +53,6 @@ from novel_agents.server.models import (
     now_ms,
 )
 
-# 模拟模式下每个 Agent 输出的样本片段（与系统中真实的 6 个 Agent 职责一一对应）
-MOCK_OUTPUTS: dict[str, list[str]] = {
-    "planner": [
-        "本章核心事件：少年陈尘在乱葬岗目睹师兄陨落，意外得到一枚残破玉简。",
-        "情绪曲线设计：压抑（蹲守）→ 紧张（追杀）→ 暴怒（师兄陨落）→ 破釜沉舟。",
-        (
-            "Beats: 1) 黄昏乱葬岗蹲守; 2) 师兄重伤逃来; 3) 黑袍人追至; "
-            "4) 师兄交付玉简; 5) 少年怒夺玉简; 6) 玉简共鸣识主。"
-        ),
-        "钩子：玉简中传来一道沙哑笑声——'小子，可愿拜我为师？'",
-    ],
-    "world_builder": [
-        "审查结论：通过。新增设定『玄阴玉简』与既有功法体系兼容。",
-        "本章涉及设定：练气七层（陈尘）/ 筑基中期（黑袍）/ 玉简属性偏阴煞。",
-        "时间线：故事时间第 137 日傍晚，与前文衔接处无冲突。",
-        "建议：黑袍人法器『噬魂幡』需补一句在第 5 章已出现的伏笔回扣。",
-    ],
-    "writer": [
-        "暮色像一摊洗不开的旧墨，沿着乱葬岗的碎石缓缓铺陈。陈尘屏住呼吸，藏在一座坍塌的衣冠冢后。",
-        "他能闻到风里有铁锈味——是血。师兄的血。",
-        "黑袍人的脚步停在三丈外，'交出来，留你全尸。'",
-        "陈尘忽然笑了。笑里有泪，也有别的什么——比泪更烫的东西。",
-        "他从怀里掏出那枚玉简，玉简表面骤然浮起一行字：『小子，可愿拜我为师？』",
-    ],
-    "reviewer": [
-        "总分：43/50",
-        "叙事逻辑 5/5 · 人物一致性 5/5 · 设定连贯 4/5 · 场景执行 5/5 · 节奏 4/5",
-        "对话质量 4/5 · 描写质量 5/5 · 去AI味 4/5 · 钩子 5/5 · 信息密度 4/5",
-        (
-            "可优化：第 3 个场景中『噬魂幡』描写略平，建议加 1-2 句声效或寒意；"
-            "段末『比泪更烫的东西』节奏可再短一拍。"
-        ),
-        "结论：通过（建议轻度润色）。",
-    ],
-    "polisher": [
-        "暮色是化不开的旧墨，一寸寸漫过乱葬岗的碎骨。",
-        "陈尘伏在塌掉一半的衣冠冢后，连呼吸都收得极薄。",
-        "风里有血腥味。是师兄的。",
-        "脚步在三丈外停住。",
-        "『交出来——留你全尸。』",
-        "陈尘忽然笑了。笑里有泪。也有别的，比泪更烫的东西。",
-        "他摸出那枚玉简。玉面骤然浮起一行字：",
-        "『小子，可愿拜我为师？』",
-    ],
-    "reader_sim": [
-        "爽感评估：师兄死的那段我血压上来了，太憋屈了——这才对。",
-        "代入感：『比泪更烫的东西』那一句直接破防，给评论区直接送神图素材。",
-        "追更欲：必追。玉简识主+老怪物收徒，下章不开都说不过去。",
-        "弃书风险：低。前 200 字差点没耐心，希望开头能再快一点。",
-        "评分：4.5/5 ⭐",
-        "改进建议：开头黄昏铺垫压缩到 80 字内，把『血腥味』那一句提前。",
-    ],
-}
-
 
 class RunController:
     """单个 run 的生命周期控制器"""
@@ -80,11 +60,18 @@ class RunController:
     def __init__(self, run: RunSummary) -> None:
         self.run = run
         self.pause_event = asyncio.Event()
-        self.pause_event.set()  # 默认非暂停
+        self.pause_event.set()
         self.abort_event = asyncio.Event()
         self.intervention_outputs: dict[str, str] = {}
         self.intervention_waiters: dict[str, asyncio.Event] = {}
         self.task: asyncio.Task[Any] | None = None
+        # 高级选项
+        self.is_opening: bool = False
+        self.best_of_n: int = 1
+        self.enabled_agents: set[str] = set(AGENT_ORDER)
+        self.budget_usd: float | None = None
+        # 实跑累计实际成本
+        self.actual_cost_usd: float = 0.0
 
     def pause(self) -> None:
         self.pause_event.clear()
@@ -119,6 +106,7 @@ class RunManager:
 
     def create(self, req: StartRunRequest) -> RunController:
         run_id = uuid.uuid4().hex[:10]
+        enabled = set(req.enabled_agents) if req.enabled_agents else set(AGENT_ORDER)
         agents = [
             AgentStatus(
                 id=aid,
@@ -133,6 +121,7 @@ class RunManager:
                     if AGENT_META[aid]["model_kind"] == "creative"
                     else "deepseek-v4-pro"
                 ),
+                status="idle" if aid in enabled else "skipped",
             )
             for aid in AGENT_ORDER
         ]
@@ -147,6 +136,10 @@ class RunManager:
         )
         bus.upsert_run(run)
         ctrl = RunController(run)
+        ctrl.is_opening = req.is_opening
+        ctrl.best_of_n = max(1, min(req.best_of_n, 5))
+        ctrl.enabled_agents = enabled
+        ctrl.budget_usd = req.budget_usd
         self.controllers[run_id] = ctrl
         return ctrl
 
@@ -161,9 +154,8 @@ class RunManager:
             return False
         ctrl.intervention_outputs[agent_id] = edited_output
         waiter = ctrl.intervention_waiters.get(agent_id)
-        if waiter:
-            if resume:
-                waiter.set()
+        if waiter and resume:
+            waiter.set()
         await bus.publish(
             Event(
                 run_id=run_id,
@@ -173,7 +165,6 @@ class RunManager:
                 data={"edited_output_preview": edited_output[:200]},
             )
         )
-        # Update agent state
         for a in ctrl.run.agents:
             if a.id == agent_id:
                 a.output_preview = edited_output[:600]
@@ -206,30 +197,54 @@ async def _emit(
     )
 
 
-# 各 Agent 在模拟模式下的执行步长（步数 + 每步延迟范围）
-MOCK_STEPS: dict[str, tuple[int, tuple[float, float]]] = {
-    "planner": (5, (0.35, 0.7)),
-    "world_builder": (4, (0.3, 0.6)),
-    "writer": (8, (0.5, 1.1)),
-    "reviewer": (5, (0.35, 0.7)),
-    "polisher": (7, (0.4, 0.9)),
-    "reader_sim": (4, (0.3, 0.55)),
-}
-
-
 async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
     run = ctrl.run
     run.status = "running"
     run.started_at = now_ms()
     await bus.publish_run_update(run)
+
+    # 成本预估
+    enabled_models = {
+        a.id: a.model for a in run.agents if a.id in ctrl.enabled_agents
+    }
+    cost_estimate = cost_mod.estimate_chapter_cost(
+        enabled_models, enabled=ctrl.enabled_agents, best_of_n=ctrl.best_of_n
+    )
+    await _emit(
+        run.run_id,
+        "cost_estimate",
+        message=(
+            f"💰 本章预估成本 ${cost_estimate['total_cost_usd']:.3f} "
+            f"({cost_estimate['total_tokens']:,} tokens, best_of_n={ctrl.best_of_n})"
+        ),
+        data=cost_estimate,
+    )
+    if ctrl.budget_usd is not None and cost_estimate["total_cost_usd"] > ctrl.budget_usd:
+        await _emit(
+            run.run_id,
+            "cost_warning",
+            message=(
+                f"⚠️ 预估成本 ${cost_estimate['total_cost_usd']:.3f} 已超过预算 "
+                f"${ctrl.budget_usd:.3f}，继续执行（如需中止请点终止）。"
+            ),
+            data={"budget": ctrl.budget_usd, "estimate": cost_estimate["total_cost_usd"]},
+        )
+
     await _emit(
         run.run_id,
         "run_started",
         message=(
-            f"开始创作第 {run.chapter_num} 章 "
-            f"「{run.chapter_title or '未命名'}」 (mode={run.mode})"
+            f"开始创作第 {run.chapter_num} 章 「{run.chapter_title or '未命名'}」 "
+            f"(mode={run.mode}, is_opening={ctrl.is_opening}, best_of_n={ctrl.best_of_n})"
         ),
-        data={"chapter_num": run.chapter_num, "title": run.chapter_title, "mode": run.mode},
+        data={
+            "chapter_num": run.chapter_num,
+            "title": run.chapter_title,
+            "mode": run.mode,
+            "is_opening": ctrl.is_opening,
+            "best_of_n": ctrl.best_of_n,
+            "enabled_agents": list(ctrl.enabled_agents),
+        },
     )
 
     try:
@@ -243,6 +258,12 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
         if ctrl.abort_event.is_set():
             return
 
+        # 章节副产物入账（mock / live 均执行；live 下 KPI 由 reviewer 给）
+        try:
+            await _persist_chapter_artifacts(ctrl)
+        except Exception as exc:  # pragma: no cover
+            await _emit(run.run_id, "run_error", message=f"账本写入失败: {exc}")
+
         run.status = "completed"
         run.completed_at = now_ms()
         await bus.publish_run_update(run)
@@ -251,19 +272,20 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
             "run_completed",
             message=(
                 f"流水线完成，总 token: {run.total_tokens:,}"
-                f"（输入 {run.total_prompt_tokens:,} / 输出 {run.total_completion_tokens:,}）"
+                f"，预估成本 ${cost_estimate['total_cost_usd']:.3f}"
             ),
             data={
                 "total_tokens": run.total_tokens,
                 "prompt_tokens": run.total_prompt_tokens,
                 "completion_tokens": run.total_completion_tokens,
+                "cost_usd": cost_estimate["total_cost_usd"],
             },
         )
     except asyncio.CancelledError:
         run.status = "aborted"
         await bus.publish_run_update(run)
         raise
-    except Exception as exc:  # pragma: no cover - defensive
+    except Exception as exc:  # pragma: no cover
         run.status = "error"
         await bus.publish_run_update(run)
         await _emit(run.run_id, "run_error", message=f"流水线异常: {exc}")
@@ -276,10 +298,14 @@ async def _run_mock(ctrl: RunController) -> None:
         if ctrl.abort_event.is_set():
             return
         agent = _find_agent(run, aid)
+        if aid not in ctrl.enabled_agents:
+            await _emit(
+                run.run_id, "agent_skipped", agent=aid, message=f"{agent.name} 已禁用，跳过"
+            )
+            continue
         await _execute_mock_agent(ctrl, agent, idx)
         if ctrl.abort_event.is_set():
             return
-        # 非 auto_run 模式或 Writer/Polisher 关键节点，等待干预
         if not run.auto_run and aid in ("writer", "polisher"):
             await _await_intervention(ctrl, agent)
 
@@ -301,12 +327,11 @@ async def _execute_mock_agent(
         data={"model": agent.model, "uses_references": agent.uses_references},
     )
 
-    steps, (lo, hi) = MOCK_STEPS[agent.id]
-    outputs = MOCK_OUTPUTS[agent.id]
+    steps, (lo, hi) = MOCK_STEPS.get(agent.id, (4, (0.3, 0.7)))
+    outputs = MOCK_OUTPUTS.get(agent.id, [f"{agent.name} 正在工作…"])
 
-    # 若该 Agent 可以调用爆款范文，模拟一次工具调用
     if agent.uses_references:
-        await asyncio.sleep(random.uniform(0.2, 0.5))
+        await asyncio.sleep(random.uniform(0.2, 0.4))
         await ctrl.wait_if_paused()
         agent.tool_calls += 1
         agent.last_message = "🔍 调用爆款范文检索…"
@@ -320,6 +345,24 @@ async def _execute_mock_agent(
         )
 
     accumulated_chunks: list[str] = []
+    # 开篇 3 章特殊处理：strict pacing 警告
+    if ctrl.is_opening and agent.id == "pacing_doctor":
+        await _emit(
+            run.run_id,
+            "agent_thinking",
+            agent=agent.id,
+            message="🚨 开篇 3 章特化：必须在前 800 字完成金手指亮相 + 角色钩子。",
+        )
+    # writer best_of_n
+    if agent.id == "writer" and ctrl.best_of_n > 1:
+        await _emit(
+            run.run_id,
+            "agent_thinking",
+            agent=agent.id,
+            message=f"⚙ Best-of-{ctrl.best_of_n} 并行试写中（mock 下汇总最佳版本）",
+            data={"best_of_n": ctrl.best_of_n},
+        )
+
     for step in range(steps):
         if ctrl.abort_event.is_set():
             return
@@ -327,9 +370,11 @@ async def _execute_mock_agent(
         await asyncio.sleep(random.uniform(lo, hi))
         chunk = outputs[step % len(outputs)]
         accumulated_chunks.append(chunk)
-        # 模拟 token 消耗
         p_tok = random.randint(180, 380)
         c_tok = random.randint(120, 360)
+        if agent.id == "writer" and ctrl.best_of_n > 1:
+            p_tok *= ctrl.best_of_n
+            c_tok *= ctrl.best_of_n
         latency = int(random.uniform(lo, hi) * 1000)
         agent.prompt_tokens += p_tok
         agent.completion_tokens += c_tok
@@ -383,7 +428,6 @@ async def _execute_mock_agent(
 
 
 async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
-    """在 auto_run=False 模式下等待人工干预"""
     run = ctrl.run
     agent.status = "awaiting_intervention"
     run.status = "paused"
@@ -406,10 +450,135 @@ async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
     await bus.publish_run_update(run)
 
 
+async def _persist_chapter_artifacts(ctrl: RunController) -> None:
+    """章节完成后写入：摘要 / KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint"""
+    run = ctrl.run
+    n = run.chapter_num
+    ensure_dirs()
+
+    # 1. 章节摘要
+    summary_text = MOCK_SUMMARY
+    summaries.save(n, summary_text)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        agent=None,
+        message=f"📝 章节摘要已保存 (summaries/ch{n:03d}.md)",
+        data={"kind": "summary", "chars": len(summary_text)},
+    )
+
+    # 2. KPI（mock 自动浮动；live 模式由 reviewer 给出）
+    k = randomize_kpi(n)
+    kpi_obj = kpi_mod.ChapterKPI(
+        chapter=n,
+        title=run.chapter_title,
+        word_count=2500 + random.randint(-200, 400),
+        run_id=run.run_id,
+        enabled_agents=list(ctrl.enabled_agents),
+        **k,
+    )
+    kpi_mod.save(kpi_obj)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=(
+            f"📊 章节 KPI 已保存（追订 {k['retention_score']:.2f} / 钩子 "
+            f"{k['hook_strength']:.2f} / AI 味 {k['ai_taste_score']:.2f}）"
+        ),
+        data={"kind": "kpi", **k},
+    )
+
+    # 3. AI 味硬检测（基于 mock 文本运行真实算法）
+    polished_text = "\n".join(MOCK_OUTPUTS["polisher"])
+    try:
+        lint = ai_taste_analyze(polished_text)
+        lint_dict = lint.to_dict()
+    except Exception:
+        lint_dict = MOCK_AI_LINT_SAMPLE
+    import json as _json
+    ai_lint_path(n).write_text(
+        _json.dumps(lint_dict, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=f"🔍 AI 味检测：score={lint_dict['score']} / {lint_dict.get('level','—')}",
+        data={"kind": "ai_lint", **lint_dict},
+    )
+
+    # 4. 金句库
+    for line in MOCK_HIGHLIGHTS:
+        highlights.add(n, line, tag="情绪", score=4.5)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=f"✨ 已沉淀 {len(MOCK_HIGHLIGHTS)} 句金句入金句库",
+        data={"kind": "highlights", "count": len(MOCK_HIGHLIGHTS)},
+    )
+
+    # 5. 标题候选
+    titles_mod.save_titles(n, MOCK_TITLE_CANDIDATES)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=f"🎯 已生成 {len(MOCK_TITLE_CANDIDATES)} 个标题候选",
+        data={"kind": "titles", "candidates": MOCK_TITLE_CANDIDATES},
+    )
+
+    # 6. 简介迭代候选
+    syn_text = "# 书籍简介候选\n\n" + "\n\n---\n\n".join(
+        f"## 候选 {i + 1}\n{t}" for i, t in enumerate(MOCK_SYNOPSIS_CANDIDATES)
+    )
+    titles_mod.save_synopsis(syn_text)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=f"📖 书籍简介已迭代为 {len(MOCK_SYNOPSIS_CANDIDATES)} 个候选",
+        data={"kind": "synopsis_candidates", "count": len(MOCK_SYNOPSIS_CANDIDATES)},
+    )
+
+    # 7. 伏笔账本变动（章节号映射）
+    for item in MOCK_FORESHADOWING_PLANTS:
+        clone = dict(item)
+        # 调整 planted/planned 章节号相对当前章节
+        clone["planted_chapter"] = n
+        if isinstance(clone.get("planned_payoff_chapter"), int):
+            clone["planned_payoff_chapter"] = n + (
+                clone["planned_payoff_chapter"] - 1
+            )
+        foreshadowing.upsert(clone)
+    fs_stat = foreshadowing.stats(current_chapter=n)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=(
+            f"📌 伏笔账本更新：累计 {fs_stat['total']} 个，"
+            f"未回收 {fs_stat['open']}，逾期 {fs_stat['overdue']}"
+        ),
+        data={"kind": "foreshadowing", **fs_stat},
+    )
+
+    # 8. 角色 runtime 更新
+    for upd in MOCK_CHARACTER_UPDATES:
+        character_runtime.append_snapshot(upd["name"], n, upd["snapshot"])
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=(
+            f"🪄 已更新 {len(MOCK_CHARACTER_UPDATES)} 个角色的 runtime 状态"
+        ),
+        data={"kind": "character_runtime", "count": len(MOCK_CHARACTER_UPDATES)},
+    )
+
+    # 9. 章末读者反馈占位（用户可以从 UI 输入）
+    if not feedback.load(n):
+        feedback.save(
+            n,
+            "（这里输入读者评论摘要，会反向喂给下一章规划。Mock 模式自动留空。）",
+        )
+
+
 async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
-    """真实模式 — 调用 orchestrator。当前实现为在线程池中跑同步管线，
-    并通过 wrapper 收集 token 用量。任务级中间结果会在 task 结束时透传到事件总线。
-    """
     run = ctrl.run
 
     if not os.getenv("APIMART_API_KEY"):
@@ -423,8 +592,6 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
         await _run_mock(ctrl)
         return True
 
-    # Live 模式：在线程中执行 orchestrator.run_chapter_pipeline，但在执行前
-    # 注入一个事件回调，让我们可以在每个 Task 完成时发出 agent_completed 事件。
     try:
         from novel_agents.core import orchestrator as orch
     except Exception as exc:
@@ -442,11 +609,10 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
     def update_sync():
         asyncio.run_coroutine_threadsafe(bus.publish_run_update(run), loop)
 
-    # 在 thread 内执行，简化处理；live 模式下我们仍然给前端发送进度心跳
     def thread_target() -> str:
-        # 在每个 agent 启动时手动 emit；CrewAI 的细粒度回调因版本差异较大，
-        # 这里采用粗粒度（任务级）事件。
         for aid in AGENT_ORDER:
+            if aid not in ctrl.enabled_agents:
+                continue
             agent = _find_agent(run, aid)
             agent.status = "running"
             agent.started_at = now_ms()
@@ -464,6 +630,8 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
             return ""
 
         for aid in AGENT_ORDER:
+            if aid not in ctrl.enabled_agents:
+                continue
             agent = _find_agent(run, aid)
             agent.status = "done"
             agent.completed_at = now_ms()
