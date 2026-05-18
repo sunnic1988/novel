@@ -171,6 +171,7 @@ class StartRunRequest(BaseModel):
     chapter_num: int = 1
     chapter_title: str = ""
     auto_run: bool = True
+    step_confirm_mode: bool | None = None
     mode: Literal["live", "mock"] = "mock"
     synopsis_override: str = ""
     is_opening: bool = False

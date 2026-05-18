@@ -17,7 +17,7 @@ export function CostPanel({
   refreshKey = 0,
 }: {
   chapterNum: number;
-  mode: "live" | "mock";
+  mode: "live";
   isOpening: boolean;
   bestOfN: number;
   enabledAgents: string[];

@@ -20,7 +20,7 @@ export interface PipelineRequest {
   chapter_num: number;
   chapter_title: string;
   auto_run: boolean;
-  mode: "live" | "mock";
+  mode: "live";
   is_opening: boolean;
   best_of_n: number;
   enabled_agents: string[];
@@ -89,7 +89,7 @@ export function HeroPanel({
           </h1>
           <p className="mt-1 max-w-xl text-[13px] text-slate-400">
             策划 → 世界观 → 写作 → 审校 → 润色 → 读者模拟。
-            每一次 LLM 调用、工具调用、token 消耗都会被实时留痕。
+            每一次 LLM 调用都会完整记录提示词输入与模型输出，可逐步人工确认后继续。
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
             <span className="badge border-cyan-300/30 bg-cyan-400/10 text-cyan-200">
@@ -107,7 +107,7 @@ export function HeroPanel({
               )}
             >
               <KeyRound size={11} />
-              {status?.has_api_key ? "APIMart Key 已配置" : "未配置 Key · 演示模式"}
+              {status?.has_api_key ? "APIMart Key 已配置" : "未配置 Key · 无法启动"}
             </span>
             <span className="badge border-slate-400/30 bg-white/5 text-slate-300">
               <Hash size={11} /> 章节 {status?.chapters_count ?? 0} 已完成
@@ -136,25 +136,14 @@ export function HeroPanel({
             />
           </Field>
           <Field label="模式">
-            <select
-              value={config.mode}
-              onChange={(e) => setCfg({ mode: e.target.value as any })}
-              className="bg-transparent text-sm text-slate-100 w-full outline-none"
-            >
-              <option value="mock" className="bg-ink-900">
-                演示模式 (Mock)
-              </option>
-              <option value="live" className="bg-ink-900">
-                实跑 (Live)
-              </option>
-            </select>
+            <div className="text-sm text-slate-100">实跑 (Live)</div>
           </Field>
           <Field label="运行方式">
             <button
               onClick={() => setCfg({ auto_run: !config.auto_run })}
               className="text-left w-full text-sm text-slate-100 outline-none"
             >
-              {config.auto_run ? "自动连续" : "在 写手/润色 暂停"}
+              {config.auto_run ? "自动连续" : "逐 Agent 人工确认"}
             </button>
           </Field>
 
@@ -249,7 +238,7 @@ export function HeroPanel({
       </div>
 
       {run && (
-        <div className="relative mt-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="relative mt-5 grid grid-cols-2 gap-3 md:grid-cols-5">
           <MetricTile label="本次 Token" value={run.total_tokens.toLocaleString()} accent="text-cyan-300" />
           <MetricTile
             label="输入 / 输出"
@@ -260,6 +249,11 @@ export function HeroPanel({
             label="运行状态"
             value={STATUS_LABEL[run.status] || run.status}
             accent={STATUS_TONE[run.status]}
+          />
+          <MetricTile
+            label="确认进度"
+            value={run.paused_at_agent ? `等待 ${run.paused_at_agent}` : "9/9 串行"}
+            accent="text-violet-300"
           />
         </div>
       )}

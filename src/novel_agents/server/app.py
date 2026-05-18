@@ -52,6 +52,7 @@ from novel_agents.server.runner import manager
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 REFERENCES_DIR = PROJECT_ROOT / "references"
+RUN_ARCHIVES_DIR = PROJECT_ROOT / "output" / "runs"
 
 
 def create_app() -> FastAPI:
@@ -114,7 +115,7 @@ def create_app() -> FastAPI:
             "reference_chunks": ref_vec,
             "chapter_chunks": ch_vec,
             "has_api_key": bool(os.getenv("APIMART_API_KEY")),
-            "default_mode": "live" if os.getenv("APIMART_API_KEY") else "mock",
+            "default_mode": "live",
         }
 
     # ── Runs ──────────────────────────────────────────────────
@@ -122,8 +123,10 @@ def create_app() -> FastAPI:
     async def create_run(req: StartRunRequest) -> dict[str, Any]:
         import os
 
-        if req.mode == "live" and not os.getenv("APIMART_API_KEY"):
-            req.mode = "mock"
+        if req.mode != "live":
+            raise HTTPException(400, "mock mode has been removed")
+        if not os.getenv("APIMART_API_KEY"):
+            raise HTTPException(400, "APIMART_API_KEY is required for live mode")
         ctrl = manager.create(req)
         await manager.start(ctrl, req)
         return {"run_id": ctrl.run.run_id, "run": ctrl.run.model_dump()}
@@ -164,6 +167,42 @@ def create_app() -> FastAPI:
     def get_events(run_id: str) -> dict[str, Any]:
         events = bus.get_events(run_id)
         return {"events": [e.model_dump() for e in events]}
+
+    @app.get("/api/runs/{run_id}/artifacts")
+    def list_run_artifacts(run_id: str) -> dict[str, Any]:
+        run_dir = RUN_ARCHIVES_DIR / run_id
+        if not run_dir.exists():
+            return {"items": []}
+        items: list[dict[str, Any]] = []
+        for fp in sorted(run_dir.glob("*")):
+            if not fp.is_file():
+                continue
+            stat = fp.stat()
+            items.append(
+                {
+                    "name": fp.name,
+                    "size": stat.st_size,
+                    "modified": int(stat.st_mtime * 1000),
+                    "type": fp.suffix.lower().lstrip("."),
+                }
+            )
+        return {"items": items}
+
+    @app.get("/api/runs/{run_id}/artifacts/{filename}")
+    def get_run_artifact(run_id: str, filename: str) -> dict[str, Any]:
+        run_dir = RUN_ARCHIVES_DIR / run_id
+        if not run_dir.exists():
+            raise HTTPException(404, "run artifacts not found")
+        safe_name = _safe_artifact_name(filename)
+        target = run_dir / safe_name
+        if not target.exists() or not target.is_file():
+            raise HTTPException(404, "artifact not found")
+        content = target.read_text(encoding="utf-8", errors="replace")
+        return {
+            "name": safe_name,
+            "size": target.stat().st_size,
+            "content": content,
+        }
 
     @app.post("/api/runs/{run_id}/pause")
     async def pause_run(run_id: str) -> dict[str, Any]:
@@ -476,6 +515,7 @@ def create_app() -> FastAPI:
                     "agents": "/api/agents",
                     "status": "/api/status",
                     "runs": "/api/runs",
+                    "run_artifacts": "/api/runs/{run_id}/artifacts",
                     "references": "/api/references",
                     "book": "/api/book/dashboard",
                     "foreshadowing": "/api/foreshadowing",
@@ -497,4 +537,13 @@ def _safe_filename(name: str, default_ext: str = ".md") -> str:
     suffix = Path(base).suffix.lower()
     if suffix not in (".md", ".txt"):
         base = base + default_ext
+    return base
+
+
+def _safe_artifact_name(name: str) -> str:
+    base = Path(name).name.strip()
+    if not base:
+        raise HTTPException(400, "invalid artifact name")
+    if "/" in base or "\\" in base:
+        raise HTTPException(400, "invalid artifact name")
     return base

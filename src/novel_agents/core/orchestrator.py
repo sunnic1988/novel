@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from crewai import Crew, Process, Task
@@ -16,6 +17,7 @@ from novel_agents.agents import (
     create_world_builder,
     create_writer,
 )
+from novel_agents.core.llm_gateway import LLM_ASSIGNMENT
 from novel_agents.core.memory import ingest_chapter, ingest_reference_texts
 
 console = Console()
@@ -117,6 +119,80 @@ OPENING_GUIDANCE = """
 def _load_chapter_plan(chapter_num: int) -> str:
     plan_file = PROJECT_ROOT / "plans" / f"ch{chapter_num:03d}-plan.md"
     return _read_file_safe(plan_file)
+
+
+def _build_agent_prompt(
+    agent_id: str,
+    chapter_num: int,
+    chapter_title: str,
+    synopsis: str,
+    previous_outputs: dict[str, str],
+    is_opening: bool,
+) -> str:
+    previous_text = "\n\n".join(
+        f"[{aid} 输出]\n{txt[:5000]}" for aid, txt in previous_outputs.items()
+    )
+    opening_hint = OPENING_GUIDANCE if is_opening else ""
+    role_instruction = {
+        "arc_architect": "你是卷纲架构师，输出本章在全书中的卷级定位、冲突主线、伏笔安排。",
+        "planner": "你是策划师，输出本章场景beats与节奏推进。",
+        "pacing_doctor": "你是节奏医生，检查上一步节奏并给出可执行修正方案。",
+        "world_builder": "你是世界观师，检查设定一致性并补齐设定约束。",
+        "writer": "你是写手，基于前序输出写出本章正文草稿。",
+        "reviewer": "你是审校师，给出结构化审校意见和改写建议。",
+        "polisher": "你是润色师，输出去AI味后的润色正文。",
+        "reader_sim": "你是读者模拟，输出读者视角反馈、追更欲和风险点。",
+        "marketing_specialist": "你是营销专家，输出标题候选与推广卖点。",
+    }[agent_id]
+    return (
+        f"{role_instruction}\n\n"
+        f"章节：第{chapter_num}章 {chapter_title or '未命名'}\n\n"
+        f"【故事总纲】\n{synopsis[:6000]}\n\n"
+        f"【开篇特化要求】\n{opening_hint}\n\n"
+        f"【前序Agent输出】\n{previous_text or '（无）'}\n\n"
+        "请直接给出本Agent最终输出，不要解释执行过程。"
+    )
+
+
+def run_single_agent_step(
+    agent_id: str,
+    chapter_num: int,
+    chapter_title: str = "",
+    synopsis_override: str = "",
+    previous_outputs: dict[str, str] | None = None,
+    is_opening: bool = False,
+    stream_callback: Any | None = None,
+) -> dict[str, str | int]:
+    """运行单个 Agent 步骤并返回可追踪结果。"""
+    synopsis = synopsis_override or _load_synopsis()
+    prev = previous_outputs or {}
+    prompt = _build_agent_prompt(
+        agent_id=agent_id,
+        chapter_num=chapter_num,
+        chapter_title=chapter_title,
+        synopsis=synopsis,
+        previous_outputs=prev,
+        is_opening=is_opening,
+    )
+    llm = LLM_ASSIGNMENT[agent_id]()
+    started = time.perf_counter()
+    response = llm.call(
+        messages=[{"role": "user", "content": prompt}],
+        stream_callback=stream_callback,
+    )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+    # 粗略 token 估算：中文/英文混排场景下使用字符长度近似。
+    prompt_tokens = max(1, len(prompt) // 4)
+    completion_tokens = max(1, len(response) // 4)
+    return {
+        "prompt_full": prompt,
+        "response_full": response,
+        "model": llm.model,
+        "latency_ms": elapsed_ms,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+    }
 
 
 def run_chapter_pipeline(

@@ -27,6 +27,7 @@ class APIMartLLM(LLM):
         available_functions: list[dict] | None = None,
         **kwargs: Any,
     ) -> str:
+        stream_callback = kwargs.pop("stream_callback", None)
         # APIMart的Claude端点不支持assistant message prefill
         # 如果最后一条消息是assistant角色，需要移除（CrewAI内部行为）
         cleaned_messages = list(messages)
@@ -63,6 +64,8 @@ class APIMartLLM(LLM):
             delta = chunk.choices[0].delta
             if delta.content:
                 full_content += delta.content
+                if callable(stream_callback):
+                    stream_callback(delta.content)
             if hasattr(delta, "tool_calls") and delta.tool_calls:
                 for tc in delta.tool_calls:
                     idx = tc.index

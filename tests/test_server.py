@@ -18,6 +18,8 @@ def test_app_boots():
         "/api/status",
         "/api/runs",
         "/api/runs/{run_id}",
+        "/api/runs/{run_id}/artifacts",
+        "/api/runs/{run_id}/artifacts/{filename}",
         "/api/references",
         "/ws",
     ]:
@@ -74,6 +76,10 @@ def test_mock_run_executes_all_nine_agents():
     assert "agent_tool_call" in types
     assert "cost_estimate" in types
     assert "artifact_saved" in types
+    llm_events = [e for e in events if e.type == "agent_llm_call"]
+    assert llm_events, "应包含至少一条 LLM 调用事件"
+    assert "prompt_full" in llm_events[0].data
+    assert "response_full" in llm_events[0].data
 
 
 def test_mock_run_persists_chapter_artifacts(tmp_path, monkeypatch):
@@ -203,3 +209,75 @@ def test_reference_endpoints_exist():
     assert "/api/references/ingest" in paths
     assert "/api/references/search" in paths
     assert "/api/references/upload" in paths
+
+
+def test_step_confirm_mode_requires_manual_resume():
+    """逐步确认模式下，每个 agent 完成后必须人工确认才会进入下一步。"""
+    from novel_agents.server.events import bus
+
+    async def wait_until_paused(ctrl, timeout=8.0):
+        start = asyncio.get_running_loop().time()
+        while asyncio.get_running_loop().time() - start < timeout:
+            if ctrl.run.paused_at_agent:
+                return ctrl.run.paused_at_agent
+            if ctrl.task and ctrl.task.done():
+                return None
+            await asyncio.sleep(0.05)
+        return None
+
+    async def go():
+        req = StartRunRequest(
+            chapter_num=77,
+            chapter_title="逐步确认测试",
+            mode="mock",
+            auto_run=False,
+            step_confirm_mode=True,
+        )
+        ctrl = manager.create(req)
+        await manager.start(ctrl, req)
+        assert ctrl.task is not None
+
+        expected_order = [
+            "arc_architect",
+            "planner",
+            "pacing_doctor",
+            "world_builder",
+            "writer",
+            "reviewer",
+            "polisher",
+            "reader_sim",
+            "marketing_specialist",
+        ]
+        seen = []
+        while not ctrl.task.done():
+            paused_agent = await wait_until_paused(ctrl)
+            if not paused_agent:
+                break
+            seen.append(paused_agent)
+            ok = await manager.apply_intervention(
+                ctrl.run.run_id,
+                paused_agent,
+                f"人工确认：{paused_agent}",
+                True,
+            )
+            assert ok
+            await asyncio.sleep(0.05)
+        await ctrl.task
+        return ctrl, seen
+
+    ctrl, seen = asyncio.run(go())
+    assert ctrl.run.status == "completed"
+    assert seen == [
+        "arc_architect",
+        "planner",
+        "pacing_doctor",
+        "world_builder",
+        "writer",
+        "reviewer",
+        "polisher",
+        "reader_sim",
+        "marketing_specialist",
+    ]
+    events = bus.get_events(ctrl.run.run_id)
+    req_events = [e for e in events if e.type == "intervention_requested"]
+    assert len(req_events) == 9

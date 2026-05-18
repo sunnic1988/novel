@@ -48,7 +48,7 @@ export function InterventionDrawer({
                   编辑 {agent.name} 的产出
                 </h2>
                 <p className="mt-1 text-[12px] text-slate-400">
-                  你可以直接修改产出文本，保存后将作为下一阶段 Agent 的输入。
+                  当前流程停在该 Agent，确认后才会进入下一个 Agent。
                 </p>
               </div>
               <button onClick={onClose} className="rounded-md p-1.5 text-slate-400 hover:bg-white/5">
@@ -59,7 +59,7 @@ export function InterventionDrawer({
             <div className="mt-4 flex-1 overflow-hidden">
               <div className="mb-2 flex items-center gap-2 text-[11px] text-slate-500">
                 <Edit3 size={11} />
-                修改后保存即可继续流水线，或保存但保持暂停状态
+                你可以只确认继续，也可以先编辑结果再继续
               </div>
               <textarea
                 value={draft}
@@ -83,7 +83,7 @@ export function InterventionDrawer({
                 className="btn-ghost"
               >
                 <Save size={14} />
-                仅保存（保持暂停）
+                仅保存（继续停留）
               </button>
               <button
                 disabled={busy}
@@ -99,7 +99,7 @@ export function InterventionDrawer({
                 className="btn-primary"
               >
                 <Save size={14} />
-                保存并继续流水线
+                确认并进入下一 Agent
               </button>
             </div>
           </motion.div>

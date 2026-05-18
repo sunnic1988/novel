@@ -7,9 +7,11 @@ KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint / 章节摘�
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 import uuid
+from pathlib import Path
 from typing import Any
 
 from novel_agents.book import (
@@ -53,6 +55,11 @@ from novel_agents.server.models import (
     now_ms,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+RUN_OUTPUTS_ROOT = PROJECT_ROOT / "output" / "runs"
+OUTPUT_PREVIEW_LIMIT = 50000
+LAST_MESSAGE_LIMIT = 400
+
 
 class RunController:
     """单个 run 的生命周期控制器"""
@@ -72,6 +79,9 @@ class RunController:
         self.budget_usd: float | None = None
         # 实跑累计实际成本
         self.actual_cost_usd: float = 0.0
+        self.step_confirm_mode: bool = False
+        self.agent_outputs: dict[str, str] = {}
+        self.call_index: int = 0
 
     def pause(self) -> None:
         self.pause_event.clear()
@@ -140,6 +150,9 @@ class RunManager:
         ctrl.best_of_n = max(1, min(req.best_of_n, 5))
         ctrl.enabled_agents = enabled
         ctrl.budget_usd = req.budget_usd
+        ctrl.step_confirm_mode = (
+            req.step_confirm_mode if req.step_confirm_mode is not None else (not req.auto_run)
+        )
         self.controllers[run_id] = ctrl
         return ctrl
 
@@ -152,10 +165,13 @@ class RunManager:
         ctrl = self.controllers.get(run_id)
         if not ctrl:
             return False
+        if ctrl.run.paused_at_agent and ctrl.run.paused_at_agent != agent_id:
+            return False
         ctrl.intervention_outputs[agent_id] = edited_output
         waiter = ctrl.intervention_waiters.get(agent_id)
         if waiter and resume:
             waiter.set()
+        _persist_intervention(run_id, agent_id, edited_output, resume)
         await bus.publish(
             Event(
                 run_id=run_id,
@@ -167,8 +183,11 @@ class RunManager:
         )
         for a in ctrl.run.agents:
             if a.id == agent_id:
-                a.output_preview = edited_output[:600]
+                if edited_output:
+                    a.output_preview = edited_output[:OUTPUT_PREVIEW_LIMIT]
+                    a.last_message = "人工确认已更新产出"
                 a.status = "done" if resume else "awaiting_intervention"
+        _write_run_state(ctrl.run)
         if resume:
             ctrl.resume()
         await bus.publish_run_update(ctrl.run)
@@ -197,10 +216,101 @@ async def _emit(
     )
 
 
+def _run_dir(run_id: str) -> Path:
+    d = RUN_OUTPUTS_ROOT / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _write_run_manifest(ctrl: RunController) -> None:
+    run = ctrl.run
+    manifest = {
+        "run_id": run.run_id,
+        "chapter_num": run.chapter_num,
+        "chapter_title": run.chapter_title,
+        "mode": run.mode,
+        "auto_run": run.auto_run,
+        "step_confirm_mode": ctrl.step_confirm_mode,
+        "enabled_agents": sorted(ctrl.enabled_agents),
+        "best_of_n": ctrl.best_of_n,
+        "budget_usd": ctrl.budget_usd,
+    }
+    (_run_dir(run.run_id) / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def _append_stream_delta(
+    run_id: str, agent_id: str, step_index: int, chunk: str
+) -> None:
+    if not chunk:
+        return
+    stream_file = _run_dir(run_id) / f"step_{step_index:02d}_{agent_id}.stream.txt"
+    with stream_file.open("a", encoding="utf-8") as f:
+        f.write(chunk)
+
+
+def _persist_agent_call(
+    run_id: str,
+    agent_id: str,
+    step_index: int,
+    call_id: str,
+    prompt_full: str,
+    response_full: str,
+    meta: dict[str, Any],
+) -> None:
+    run_dir = _run_dir(run_id)
+    prefix = f"step_{step_index:02d}_{agent_id}_{call_id}"
+    md_path = run_dir / f"{prefix}.md"
+    json_path = run_dir / f"{prefix}.json"
+    md_path.write_text(
+        (
+            f"# {agent_id} · call {call_id}\n\n"
+            "## Prompt\n\n"
+            f"{prompt_full}\n\n"
+            "## Response\n\n"
+            f"{response_full}\n"
+        ),
+        encoding="utf-8",
+    )
+    payload = {
+        "run_id": run_id,
+        "agent_id": agent_id,
+        "step_index": step_index,
+        "call_id": call_id,
+        "prompt_full": prompt_full,
+        "response_full": response_full,
+        "meta": meta,
+    }
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _persist_intervention(
+    run_id: str, agent_id: str, edited_output: str, resume: bool
+) -> None:
+    run_dir = _run_dir(run_id)
+    data = {
+        "agent_id": agent_id,
+        "resume": resume,
+        "edited_output": edited_output,
+        "chars": len(edited_output),
+    }
+    fp = run_dir / f"intervention_{agent_id}.json"
+    fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_run_state(run: RunSummary) -> None:
+    (_run_dir(run.run_id) / "run_state.json").write_text(
+        json.dumps(run.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
 async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
     run = ctrl.run
     run.status = "running"
     run.started_at = now_ms()
+    _write_run_manifest(ctrl)
+    _write_run_state(run)
     await bus.publish_run_update(run)
 
     # 成本预估
@@ -235,7 +345,8 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
         "run_started",
         message=(
             f"开始创作第 {run.chapter_num} 章 「{run.chapter_title or '未命名'}」 "
-            f"(mode={run.mode}, is_opening={ctrl.is_opening}, best_of_n={ctrl.best_of_n})"
+            f"(mode={run.mode}, is_opening={ctrl.is_opening}, best_of_n={ctrl.best_of_n}, "
+            f"step_confirm={ctrl.step_confirm_mode})"
         ),
         data={
             "chapter_num": run.chapter_num,
@@ -243,6 +354,7 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
             "mode": run.mode,
             "is_opening": ctrl.is_opening,
             "best_of_n": ctrl.best_of_n,
+            "step_confirm_mode": ctrl.step_confirm_mode,
             "enabled_agents": list(ctrl.enabled_agents),
         },
     )
@@ -251,6 +363,9 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
         if run.mode == "live":
             ok = await _run_live(ctrl, req)
             if not ok:
+                run.status = "error"
+                _write_run_state(run)
+                await bus.publish_run_update(run)
                 return
         else:
             await _run_mock(ctrl)
@@ -266,6 +381,7 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
 
         run.status = "completed"
         run.completed_at = now_ms()
+        _write_run_state(run)
         await bus.publish_run_update(run)
         await _emit(
             run.run_id,
@@ -283,10 +399,12 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
         )
     except asyncio.CancelledError:
         run.status = "aborted"
+        _write_run_state(run)
         await bus.publish_run_update(run)
         raise
     except Exception as exc:  # pragma: no cover
         run.status = "error"
+        _write_run_state(run)
         await bus.publish_run_update(run)
         await _emit(run.run_id, "run_error", message=f"流水线异常: {exc}")
 
@@ -306,7 +424,7 @@ async def _run_mock(ctrl: RunController) -> None:
         await _execute_mock_agent(ctrl, agent, idx)
         if ctrl.abort_event.is_set():
             return
-        if not run.auto_run and aid in ("writer", "polisher"):
+        if ctrl.step_confirm_mode:
             await _await_intervention(ctrl, agent)
 
 
@@ -383,13 +501,38 @@ async def _execute_mock_agent(
         agent.latency_ms += latency
         agent.progress = (step + 1) / steps
         agent.last_message = chunk[:80]
-        agent.output_preview = "\n".join(accumulated_chunks)[:1200]
+        agent.output_preview = "\n".join(accumulated_chunks)[:OUTPUT_PREVIEW_LIMIT]
 
         run.total_prompt_tokens += p_tok
         run.total_completion_tokens += c_tok
         run.total_tokens = run.total_prompt_tokens + run.total_completion_tokens
         run.total_llm_calls += 1
 
+        ctrl.call_index += 1
+        call_id = f"{run.run_id}-{agent.id}-{ctrl.call_index}"
+        prompt_full = (
+            f"[MOCK] agent={agent.id}, step={step + 1}/{steps}, "
+            f"chapter={run.chapter_num}, title={run.chapter_title or '未命名'}\n"
+            "请基于当前上下文生成该步骤输出。"
+        )
+        response_full = chunk
+        _persist_agent_call(
+            run_id=run.run_id,
+            agent_id=agent.id,
+            step_index=idx + 1,
+            call_id=call_id,
+            prompt_full=prompt_full,
+            response_full=response_full,
+            meta={
+                "mode": run.mode,
+                "model": agent.model,
+                "prompt_tokens": p_tok,
+                "completion_tokens": c_tok,
+                "latency_ms": latency,
+                "step": step + 1,
+                "total_steps": steps,
+            },
+        )
         await bus.publish_run_update(run)
         await _emit(
             run.run_id,
@@ -397,12 +540,18 @@ async def _execute_mock_agent(
             agent=agent.id,
             message=chunk,
             data={
+                "call_id": call_id,
+                "agent_id": agent.id,
+                "step_index": step + 1,
                 "step": step + 1,
                 "total_steps": steps,
+                "prompt_full": prompt_full,
+                "response_full": response_full,
                 "prompt_tokens": p_tok,
                 "completion_tokens": c_tok,
                 "latency_ms": latency,
                 "model": agent.model,
+                "token_usage": {"prompt": p_tok, "completion": c_tok, "total": p_tok + c_tok},
             },
         )
 
@@ -410,6 +559,7 @@ async def _execute_mock_agent(
     agent.completed_at = now_ms()
     agent.progress = 1.0
     agent.last_message = "✓ 完成"
+    ctrl.agent_outputs[agent.id] = agent.output_preview
     await bus.publish_run_update(run)
     await _emit(
         run.run_id,
@@ -432,6 +582,7 @@ async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
     agent.status = "awaiting_intervention"
     run.status = "paused"
     run.paused_at_agent = agent.id
+    _write_run_state(run)
     ctrl.pause_event.clear()
     waiter = asyncio.Event()
     ctrl.intervention_waiters[agent.id] = waiter
@@ -443,10 +594,15 @@ async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
         message=f"等待人工对 {agent.name} 的产出进行确认/编辑…",
     )
     await waiter.wait()
+    edited = ctrl.intervention_outputs.get(agent.id)
+    if edited:
+        ctrl.agent_outputs[agent.id] = edited
+        agent.output_preview = edited[:OUTPUT_PREVIEW_LIMIT]
     run.paused_at_agent = None
     ctrl.intervention_waiters.pop(agent.id, None)
     ctrl.pause_event.set()
     run.status = "running"
+    _write_run_state(run)
     await bus.publish_run_update(run)
 
 
@@ -585,12 +741,9 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
         await _emit(
             run.run_id,
             "run_error",
-            message="未设置 APIMART_API_KEY；自动切换为 mock 演示模式。",
+            message="未设置 APIMART_API_KEY，live 模式无法启动。",
         )
-        run.mode = "mock"
-        await bus.publish_run_update(run)
-        await _run_mock(ctrl)
-        return True
+        return False
 
     try:
         from novel_agents.core import orchestrator as orch
@@ -598,46 +751,172 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
         await _emit(run.run_id, "run_error", message=f"无法导入 orchestrator: {exc}")
         return False
 
-    loop = asyncio.get_running_loop()
+    for idx, aid in enumerate(AGENT_ORDER):
+        if ctrl.abort_event.is_set():
+            return False
+        await ctrl.wait_if_paused()
+        agent = _find_agent(run, aid)
+        if aid not in ctrl.enabled_agents:
+            await _emit(
+                run.run_id, "agent_skipped", agent=aid, message=f"{agent.name} 已禁用，跳过"
+            )
+            continue
+        await _execute_live_agent(ctrl, req, orch, agent, idx)
+        if ctrl.abort_event.is_set():
+            return False
+        if ctrl.step_confirm_mode:
+            await _await_intervention(ctrl, agent)
+    return True
 
-    def emit_sync(type_: str, agent: str | None, message: str, data: dict[str, Any] | None = None):
-        asyncio.run_coroutine_threadsafe(
-            _emit(run.run_id, type_, agent=agent, message=message, data=data or {}),
-            loop,
+
+async def _execute_live_agent(
+    ctrl: RunController,
+    req: StartRunRequest,
+    orch: Any,
+    agent: AgentStatus,
+    idx: int,
+) -> None:
+    run = ctrl.run
+    aid = agent.id
+    loop = asyncio.get_running_loop()
+    ctrl.call_index += 1
+    call_id = f"{run.run_id}-{aid}-{ctrl.call_index}"
+    stream_state = {"text": ""}
+
+    async def _publish_stream_chunk(chunk: str) -> None:
+        stream_state["text"] += chunk
+        _append_stream_delta(run.run_id, aid, idx + 1, chunk)
+        agent.last_message = chunk[-LAST_MESSAGE_LIMIT:]
+        agent.output_preview = stream_state["text"][-OUTPUT_PREVIEW_LIMIT:]
+        agent.progress = max(agent.progress, 0.05)
+        await bus.publish_run_update(run)
+        await _emit(
+            run.run_id,
+            "agent_stream_delta",
+            agent=aid,
+            message=chunk,
+            data={
+                "call_id": call_id,
+                "agent_id": aid,
+                "step_index": idx + 1,
+                "delta": chunk,
+                "accumulated_chars": len(stream_state["text"]),
+            },
         )
 
-    def update_sync():
-        asyncio.run_coroutine_threadsafe(bus.publish_run_update(run), loop)
+    def _stream_callback(chunk: str) -> None:
+        if not chunk:
+            return
+        asyncio.run_coroutine_threadsafe(_publish_stream_chunk(chunk), loop)
 
-    def thread_target() -> str:
-        for aid in AGENT_ORDER:
-            if aid not in ctrl.enabled_agents:
-                continue
-            agent = _find_agent(run, aid)
-            agent.status = "running"
-            agent.started_at = now_ms()
-            emit_sync("agent_started", aid, f"{agent.name} 开始工作")
-            update_sync()
-        try:
-            result = orch.run_chapter_pipeline(
-                req.chapter_num,
-                req.chapter_title,
-                3,
-                synopsis_override=req.synopsis_override,
-            )
-        except Exception as exc:
-            emit_sync("run_error", None, f"管线执行失败: {exc}")
-            return ""
+    agent.status = "running"
+    agent.started_at = now_ms()
+    agent.progress = 0.0
+    agent.last_message = "正在生成中…"
+    await bus.publish_run_update(run)
+    await _emit(
+        run.run_id,
+        "agent_started",
+        agent=aid,
+        message=f"{agent.name} 开始工作 · 使用模型 {agent.model}",
+        data={"model": agent.model, "uses_references": agent.uses_references, "order": idx + 1},
+    )
 
-        for aid in AGENT_ORDER:
-            if aid not in ctrl.enabled_agents:
-                continue
-            agent = _find_agent(run, aid)
-            agent.status = "done"
-            agent.completed_at = now_ms()
-            emit_sync("agent_completed", aid, f"{agent.name} 完成")
-            update_sync()
-        return str(result)
+    if agent.uses_references:
+        agent.tool_calls += 1
+        await _emit(
+            run.run_id,
+            "agent_tool_call",
+            agent=aid,
+            message="调用工具：爆款范文检索",
+            data={"tool": "ReferenceSearchTool", "query": f"第{run.chapter_num}章 场景推进"},
+        )
 
-    await asyncio.to_thread(thread_target)
-    return True
+    try:
+        result = await asyncio.to_thread(
+            orch.run_single_agent_step,
+            aid,
+            req.chapter_num,
+            req.chapter_title,
+            req.synopsis_override,
+            dict(ctrl.agent_outputs),
+            ctrl.is_opening,
+            _stream_callback,
+        )
+    except Exception as exc:
+        agent.status = "error"
+        agent.last_message = f"异常: {exc}"
+        await bus.publish_run_update(run)
+        await _emit(run.run_id, "run_error", agent=aid, message=f"{agent.name} 执行失败: {exc}")
+        raise
+
+    prompt_full = str(result.get("prompt_full", ""))
+    response_full = str(result.get("response_full", ""))
+    p_tok = int(result.get("prompt_tokens", 0))
+    c_tok = int(result.get("completion_tokens", 0))
+    latency = int(result.get("latency_ms", 0))
+    model = str(result.get("model", agent.model))
+
+    if stream_state["text"]:
+        response_full = stream_state["text"]
+
+    agent.prompt_tokens += p_tok
+    agent.completion_tokens += c_tok
+    agent.total_tokens = agent.prompt_tokens + agent.completion_tokens
+    agent.llm_calls += 1
+    agent.latency_ms += latency
+    agent.progress = 1.0
+    agent.output_preview = response_full[:OUTPUT_PREVIEW_LIMIT]
+    agent.last_message = response_full[:LAST_MESSAGE_LIMIT]
+    agent.model = model
+    agent.status = "done"
+    agent.completed_at = now_ms()
+    ctrl.agent_outputs[aid] = response_full
+
+    run.total_prompt_tokens += p_tok
+    run.total_completion_tokens += c_tok
+    run.total_tokens = run.total_prompt_tokens + run.total_completion_tokens
+    run.total_llm_calls += 1
+
+    await bus.publish_run_update(run)
+    await _emit(
+        run.run_id,
+        "agent_llm_call",
+        agent=aid,
+        message=response_full[:LAST_MESSAGE_LIMIT],
+        data={
+            "call_id": call_id,
+            "agent_id": aid,
+            "step_index": idx + 1,
+            "prompt_full": prompt_full,
+            "response_full": response_full,
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "latency_ms": latency,
+            "model": model,
+            "token_usage": {"prompt": p_tok, "completion": c_tok, "total": p_tok + c_tok},
+        },
+    )
+    _persist_agent_call(
+        run_id=run.run_id,
+        agent_id=aid,
+        step_index=idx + 1,
+        call_id=call_id,
+        prompt_full=prompt_full,
+        response_full=response_full,
+        meta={
+            "mode": run.mode,
+            "model": model,
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "latency_ms": latency,
+            "step_index": idx + 1,
+        },
+    )
+    await _emit(
+        run.run_id,
+        "agent_completed",
+        agent=aid,
+        message=f"{agent.name} 完成（token {agent.total_tokens:,}）",
+        data={"output_preview": agent.output_preview, "total_tokens": agent.total_tokens},
+    )

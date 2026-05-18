@@ -148,7 +148,7 @@ export function AgentCard({
       </div>
 
       {/* stats grid */}
-      <div className="mt-3 grid grid-cols-4 gap-2 text-[10px]">
+      <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] sm:grid-cols-4">
         <Stat
           icon={<Coins size={11} />}
           label="Token"
