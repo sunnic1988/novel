@@ -60,6 +60,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUN_OUTPUTS_ROOT = PROJECT_ROOT / "output" / "runs"
 OUTPUT_PREVIEW_LIMIT = 50000
 LAST_MESSAGE_LIMIT = 400
+AGENT_EXEC_TIMEOUT_SEC = int(os.getenv("AGENT_EXEC_TIMEOUT_SEC", "240"))
 
 
 class RunController:
@@ -770,10 +771,10 @@ async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:
                 run.run_id, "agent_skipped", agent=aid, message=f"{agent.name} 已禁用，跳过"
             )
             continue
-        await _execute_live_agent(ctrl, req, orch, agent, idx)
+        waited_internally = await _execute_live_agent(ctrl, req, orch, agent, idx)
         if ctrl.abort_event.is_set():
             return False
-        if ctrl.step_confirm_mode:
+        if ctrl.step_confirm_mode and not waited_internally:
             await _await_intervention(ctrl, agent)
     return True
 
@@ -784,7 +785,7 @@ async def _execute_live_agent(
     orch: Any,
     agent: AgentStatus,
     idx: int,
-) -> None:
+) -> bool:
     run = ctrl.run
     aid = agent.id
     loop = asyncio.get_running_loop()
@@ -842,17 +843,43 @@ async def _execute_live_agent(
         )
 
     try:
-        result = await asyncio.to_thread(
-            orch.run_single_agent_step,
-            aid,
-            req.chapter_num,
-            req.chapter_title,
-            req.synopsis_override,
-            dict(ctrl.agent_outputs),
-            ctrl.is_opening,
-            _stream_callback,
-            run.script_id,
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                orch.run_single_agent_step,
+                aid,
+                req.chapter_num,
+                req.chapter_title,
+                req.synopsis_override,
+                dict(ctrl.agent_outputs),
+                ctrl.is_opening,
+                _stream_callback,
+                run.script_id,
+            ),
+            timeout=AGENT_EXEC_TIMEOUT_SEC,
         )
+    except asyncio.TimeoutError:
+        timeout_msg = f"{agent.name} 执行超时（>{AGENT_EXEC_TIMEOUT_SEC}s）"
+        agent.output_preview = stream_state["text"][:OUTPUT_PREVIEW_LIMIT]
+        agent.last_message = "执行超时，等待人工处理"
+        agent.progress = max(agent.progress, 0.1)
+        if ctrl.step_confirm_mode:
+            await _emit(
+                run.run_id,
+                "agent_timeout",
+                agent=aid,
+                message=timeout_msg,
+                data={
+                    "agent_id": aid,
+                    "timeout_sec": AGENT_EXEC_TIMEOUT_SEC,
+                    "partial_chars": len(stream_state["text"]),
+                },
+            )
+            await _await_intervention(ctrl, agent)
+            return True
+        agent.status = "error"
+        await bus.publish_run_update(run)
+        await _emit(run.run_id, "run_error", agent=aid, message=timeout_msg)
+        raise RuntimeError(timeout_msg)
     except Exception as exc:
         agent.status = "error"
         agent.last_message = f"异常: {exc}"
@@ -942,3 +969,4 @@ async def _execute_live_agent(
         message=f"{agent.name} 完成（token {agent.total_tokens:,}）",
         data={"output_preview": agent.output_preview, "total_tokens": agent.total_tokens},
     )
+    return False
