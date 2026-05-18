@@ -104,6 +104,60 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ edited_output: editedOutput, resume }),
     }),
+  retryAgent: (runId: string, agentId: string) =>
+    request<{ ok: boolean }>(`/api/runs/${runId}/agents/${agentId}/retry`, {
+      method: "POST",
+    }),
+  chatOutline: async (
+    body: {
+      messages: Array<{ role: "user" | "assistant"; content: string }>;
+      chapter_num: number;
+      script_id: string;
+    },
+    onDelta?: (delta: string) => void
+  ) => {
+    const res = await fetch("/api/outline/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(text || `outline chat failed: ${res.status}`);
+    }
+    const reader = res.body?.getReader();
+    if (!reader) return "";
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const chunks = buffer.split("\n\n");
+      buffer = chunks.pop() || "";
+      for (const raw of chunks) {
+        const line = raw
+          .split("\n")
+          .find((item) => item.trimStart().startsWith("data:"));
+        if (!line) continue;
+        const payload = line.slice(line.indexOf("data:") + 5).trim();
+        if (!payload) continue;
+        const parsed = JSON.parse(payload) as {
+          type: "delta" | "done" | "error";
+          delta?: string;
+          detail?: string;
+        };
+        if (parsed.type === "delta" && parsed.delta) {
+          full += parsed.delta;
+          onDelta?.(parsed.delta);
+        } else if (parsed.type === "error") {
+          throw new Error(parsed.detail || "outline chat failed");
+        }
+      }
+    }
+    return full;
+  },
   costEstimate: (body: object) =>
     request<CostEstimate>("/api/runs/cost-estimate", {
       method: "POST",

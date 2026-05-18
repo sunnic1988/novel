@@ -31,6 +31,7 @@ export interface AgentStatus {
   total_tokens: number;
   llm_calls: number;
   tool_calls: number;
+  retry_count: number;
   latency_ms: number;
   started_at: number | null;
   completed_at: number | null;

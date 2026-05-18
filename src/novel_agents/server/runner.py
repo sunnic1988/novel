@@ -61,6 +61,8 @@ RUN_OUTPUTS_ROOT = PROJECT_ROOT / "output" / "runs"
 OUTPUT_PREVIEW_LIMIT = 50000
 LAST_MESSAGE_LIMIT = 400
 AGENT_EXEC_TIMEOUT_SEC = int(os.getenv("AGENT_EXEC_TIMEOUT_SEC", "240"))
+MAX_AUTO_RETRIES = int(os.getenv("MAX_AUTO_RETRIES", "3"))
+RETRY_DELAY_SEC = float(os.getenv("RETRY_DELAY_SEC", "2.0"))
 
 
 class RunController:
@@ -73,6 +75,8 @@ class RunController:
         self.abort_event = asyncio.Event()
         self.intervention_outputs: dict[str, str] = {}
         self.intervention_waiters: dict[str, asyncio.Event] = {}
+        self.retry_waiters: dict[str, asyncio.Event] = {}
+        self.retry_requests: dict[str, bool] = {}
         self.task: asyncio.Task[Any] | None = None
         # 高级选项
         self.is_opening: bool = False
@@ -98,6 +102,8 @@ class RunController:
         self.abort_event.set()
         self.pause_event.set()
         for w in self.intervention_waiters.values():
+            w.set()
+        for w in self.retry_waiters.values():
             w.set()
         self.run.status = "aborted"
 
@@ -198,6 +204,25 @@ class RunManager:
         if resume:
             ctrl.resume()
         await bus.publish_run_update(ctrl.run)
+        return True
+
+    async def request_retry(self, run_id: str, agent_id: str) -> bool:
+        ctrl = self.controllers.get(run_id)
+        if not ctrl:
+            return False
+        if ctrl.run.paused_at_agent and ctrl.run.paused_at_agent != agent_id:
+            return False
+        ctrl.retry_requests[agent_id] = True
+        waiter = ctrl.retry_waiters.get(agent_id)
+        if waiter:
+            waiter.set()
+        await _emit(
+            run_id,
+            "agent_retry_requested",
+            agent=agent_id,
+            message="已收到人工重试请求，准备重新执行该 Agent。",
+            data={"agent_id": agent_id},
+        )
         return True
 
 
@@ -616,6 +641,36 @@ async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
     await bus.publish_run_update(run)
 
 
+async def _await_retry(ctrl: RunController, agent: AgentStatus) -> bool:
+    run = ctrl.run
+    run.status = "paused"
+    run.paused_at_agent = agent.id
+    _write_run_state(run)
+    waiter = asyncio.Event()
+    ctrl.retry_waiters[agent.id] = waiter
+    await bus.publish_run_update(run)
+    await _emit(
+        run.run_id,
+        "agent_retry_waiting",
+        agent=agent.id,
+        message=f"{agent.name} 自动重试已耗尽，等待人工点击重试。",
+    )
+    await waiter.wait()
+    ctrl.retry_waiters.pop(agent.id, None)
+    if ctrl.abort_event.is_set():
+        return False
+    should_retry = bool(ctrl.retry_requests.pop(agent.id, False))
+    if not should_retry:
+        return False
+    run.paused_at_agent = None
+    run.status = "running"
+    agent.status = "running"
+    agent.last_message = "收到人工重试请求，准备重新执行…"
+    _write_run_state(run)
+    await bus.publish_run_update(run)
+    return True
+
+
 async def _persist_chapter_artifacts(ctrl: RunController) -> None:
     """章节完成后写入：摘要 / KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint"""
     run = ctrl.run
@@ -789,184 +844,244 @@ async def _execute_live_agent(
     run = ctrl.run
     aid = agent.id
     loop = asyncio.get_running_loop()
-    ctrl.call_index += 1
-    call_id = f"{run.run_id}-{aid}-{ctrl.call_index}"
-    stream_state = {"text": ""}
+    is_first_attempt = True
 
-    async def _publish_stream_chunk(chunk: str) -> None:
-        stream_state["text"] += chunk
-        _append_stream_delta(run.run_id, aid, idx + 1, chunk)
-        agent.last_message = chunk[-LAST_MESSAGE_LIMIT:]
-        agent.output_preview = stream_state["text"][-OUTPUT_PREVIEW_LIMIT:]
-        agent.progress = max(agent.progress, 0.05)
-        await bus.publish_run_update(run)
-        await _emit(
-            run.run_id,
-            "agent_stream_delta",
-            agent=aid,
-            message=chunk,
-            data={
-                "call_id": call_id,
-                "agent_id": aid,
-                "step_index": idx + 1,
-                "delta": chunk,
-                "accumulated_chars": len(stream_state["text"]),
-            },
-        )
+    while True:
+        for attempt in range(1, MAX_AUTO_RETRIES + 2):
+            ctrl.call_index += 1
+            call_id = f"{run.run_id}-{aid}-{ctrl.call_index}"
+            stream_state = {"text": ""}
 
-    def _stream_callback(chunk: str) -> None:
-        if not chunk:
-            return
-        asyncio.run_coroutine_threadsafe(_publish_stream_chunk(chunk), loop)
+            async def _publish_stream_chunk(chunk: str) -> None:
+                stream_state["text"] += chunk
+                _append_stream_delta(run.run_id, aid, idx + 1, chunk)
+                agent.last_message = chunk[-LAST_MESSAGE_LIMIT:]
+                agent.output_preview = stream_state["text"][-OUTPUT_PREVIEW_LIMIT:]
+                agent.progress = max(agent.progress, 0.05)
+                await bus.publish_run_update(run)
+                await _emit(
+                    run.run_id,
+                    "agent_stream_delta",
+                    agent=aid,
+                    message=chunk,
+                    data={
+                        "call_id": call_id,
+                        "agent_id": aid,
+                        "step_index": idx + 1,
+                        "delta": chunk,
+                        "accumulated_chars": len(stream_state["text"]),
+                    },
+                )
 
-    agent.status = "running"
-    agent.started_at = now_ms()
-    agent.progress = 0.0
-    agent.last_message = "正在生成中…"
-    await bus.publish_run_update(run)
-    await _emit(
-        run.run_id,
-        "agent_started",
-        agent=aid,
-        message=f"{agent.name} 开始工作 · 使用模型 {agent.model}",
-        data={"model": agent.model, "uses_references": agent.uses_references, "order": idx + 1},
-    )
+            def _stream_callback(chunk: str) -> None:
+                if not chunk:
+                    return
+                asyncio.run_coroutine_threadsafe(_publish_stream_chunk(chunk), loop)
 
-    if agent.uses_references:
-        agent.tool_calls += 1
-        await _emit(
-            run.run_id,
-            "agent_tool_call",
-            agent=aid,
-            message="调用工具：爆款范文检索",
-            data={"tool": "ReferenceSearchTool", "query": f"第{run.chapter_num}章 场景推进"},
-        )
+            if attempt > 1:
+                await _emit(
+                    run.run_id,
+                    "agent_retry_attempt",
+                    agent=aid,
+                    message=f"{agent.name} 自动重试第 {attempt - 1}/{MAX_AUTO_RETRIES} 次",
+                    data={
+                        "agent_id": aid,
+                        "attempt": attempt - 1,
+                        "max_retries": MAX_AUTO_RETRIES,
+                    },
+                )
 
-    try:
-        result = await asyncio.wait_for(
-            asyncio.to_thread(
-                orch.run_single_agent_step,
-                aid,
-                req.chapter_num,
-                req.chapter_title,
-                req.synopsis_override,
-                dict(ctrl.agent_outputs),
-                ctrl.is_opening,
-                _stream_callback,
-                run.script_id,
-            ),
-            timeout=AGENT_EXEC_TIMEOUT_SEC,
-        )
-    except asyncio.TimeoutError:
-        timeout_msg = f"{agent.name} 执行超时（>{AGENT_EXEC_TIMEOUT_SEC}s）"
-        agent.output_preview = stream_state["text"][:OUTPUT_PREVIEW_LIMIT]
-        agent.last_message = "执行超时，等待人工处理"
-        agent.progress = max(agent.progress, 0.1)
-        if ctrl.step_confirm_mode:
+            agent.status = "running"
+            if is_first_attempt:
+                agent.started_at = now_ms()
+                is_first_attempt = False
+            agent.retry_count += 1 if attempt > 1 else 0
+            agent.progress = 0.0
+            agent.last_message = "正在生成中…"
+            await bus.publish_run_update(run)
+
+            if attempt == 1:
+                await _emit(
+                    run.run_id,
+                    "agent_started",
+                    agent=aid,
+                    message=f"{agent.name} 开始工作 · 使用模型 {agent.model}",
+                    data={
+                        "model": agent.model,
+                        "uses_references": agent.uses_references,
+                        "order": idx + 1,
+                    },
+                )
+                if agent.uses_references:
+                    agent.tool_calls += 1
+                    await _emit(
+                        run.run_id,
+                        "agent_tool_call",
+                        agent=aid,
+                        message="调用工具：爆款范文检索",
+                        data={
+                            "tool": "ReferenceSearchTool",
+                            "query": f"第{run.chapter_num}章 场景推进",
+                        },
+                    )
+
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        orch.run_single_agent_step,
+                        aid,
+                        req.chapter_num,
+                        req.chapter_title,
+                        req.synopsis_override,
+                        dict(ctrl.agent_outputs),
+                        ctrl.is_opening,
+                        _stream_callback,
+                        run.script_id,
+                    ),
+                    timeout=AGENT_EXEC_TIMEOUT_SEC,
+                )
+            except asyncio.TimeoutError:
+                err_msg = f"{agent.name} 执行超时（>{AGENT_EXEC_TIMEOUT_SEC}s）"
+                agent.output_preview = stream_state["text"][:OUTPUT_PREVIEW_LIMIT]
+                agent.last_message = err_msg
+                agent.progress = max(agent.progress, 0.1)
+                await bus.publish_run_update(run)
+                await _emit(
+                    run.run_id,
+                    "agent_timeout",
+                    agent=aid,
+                    message=err_msg,
+                    data={
+                        "agent_id": aid,
+                        "timeout_sec": AGENT_EXEC_TIMEOUT_SEC,
+                        "partial_chars": len(stream_state["text"]),
+                        "attempt": attempt,
+                    },
+                )
+                if attempt <= MAX_AUTO_RETRIES:
+                    await asyncio.sleep(RETRY_DELAY_SEC)
+                    continue
+                agent.status = "error"
+                agent.last_message = "自动重试已耗尽，等待人工重试"
+                await bus.publish_run_update(run)
+                await _emit(
+                    run.run_id,
+                    "agent_retry_exhausted",
+                    agent=aid,
+                    message=f"{agent.name} 自动重试耗尽，请人工点击重试。",
+                    data={"agent_id": aid, "max_retries": MAX_AUTO_RETRIES},
+                )
+                if await _await_retry(ctrl, agent):
+                    break
+                return False
+            except Exception as exc:
+                err_msg = f"{agent.name} 执行失败: {exc}"
+                agent.last_message = err_msg[:LAST_MESSAGE_LIMIT]
+                agent.progress = max(agent.progress, 0.1)
+                await bus.publish_run_update(run)
+                await _emit(run.run_id, "run_error", agent=aid, message=err_msg)
+                if attempt <= MAX_AUTO_RETRIES:
+                    await asyncio.sleep(RETRY_DELAY_SEC)
+                    continue
+                agent.status = "error"
+                agent.last_message = "自动重试已耗尽，等待人工重试"
+                await bus.publish_run_update(run)
+                await _emit(
+                    run.run_id,
+                    "agent_retry_exhausted",
+                    agent=aid,
+                    message=f"{agent.name} 自动重试耗尽，请人工点击重试。",
+                    data={"agent_id": aid, "max_retries": MAX_AUTO_RETRIES},
+                )
+                if await _await_retry(ctrl, agent):
+                    break
+                return False
+
+            prompt_full = str(result.get("prompt_full", ""))
+            response_full = str(result.get("response_full", ""))
+            p_tok = int(result.get("prompt_tokens", 0))
+            c_tok = int(result.get("completion_tokens", 0))
+            latency = int(result.get("latency_ms", 0))
+            model = str(result.get("model", agent.model))
+            output_kind = str(result.get("output_kind", "general"))
+            validation_warning = str(result.get("validation_warning", "")).strip()
+
+            if stream_state["text"]:
+                response_full = stream_state["text"]
+
+            agent.prompt_tokens += p_tok
+            agent.completion_tokens += c_tok
+            agent.total_tokens = agent.prompt_tokens + agent.completion_tokens
+            agent.llm_calls += 1
+            agent.latency_ms += latency
+            agent.progress = 1.0
+            agent.output_preview = response_full[:OUTPUT_PREVIEW_LIMIT]
+            agent.last_message = response_full[:LAST_MESSAGE_LIMIT]
+            agent.model = model
+            agent.status = "done"
+            agent.completed_at = now_ms()
+            ctrl.agent_outputs[aid] = response_full
+
+            run.total_prompt_tokens += p_tok
+            run.total_completion_tokens += c_tok
+            run.total_tokens = run.total_prompt_tokens + run.total_completion_tokens
+            run.total_llm_calls += 1
+
+            await bus.publish_run_update(run)
             await _emit(
                 run.run_id,
-                "agent_timeout",
+                "agent_llm_call",
                 agent=aid,
-                message=timeout_msg,
+                message=response_full[:LAST_MESSAGE_LIMIT],
                 data={
+                    "call_id": call_id,
                     "agent_id": aid,
-                    "timeout_sec": AGENT_EXEC_TIMEOUT_SEC,
-                    "partial_chars": len(stream_state["text"]),
+                    "step_index": idx + 1,
+                    "output_kind": output_kind,
+                    "prompt_full": prompt_full,
+                    "response_full": response_full,
+                    "prompt_tokens": p_tok,
+                    "completion_tokens": c_tok,
+                    "latency_ms": latency,
+                    "model": model,
+                    "token_usage": {"prompt": p_tok, "completion": c_tok, "total": p_tok + c_tok},
                 },
             )
-            await _await_intervention(ctrl, agent)
-            return True
-        agent.status = "error"
-        await bus.publish_run_update(run)
-        await _emit(run.run_id, "run_error", agent=aid, message=timeout_msg)
-        raise RuntimeError(timeout_msg)
-    except Exception as exc:
-        agent.status = "error"
-        agent.last_message = f"异常: {exc}"
-        await bus.publish_run_update(run)
-        await _emit(run.run_id, "run_error", agent=aid, message=f"{agent.name} 执行失败: {exc}")
-        raise
-
-    prompt_full = str(result.get("prompt_full", ""))
-    response_full = str(result.get("response_full", ""))
-    p_tok = int(result.get("prompt_tokens", 0))
-    c_tok = int(result.get("completion_tokens", 0))
-    latency = int(result.get("latency_ms", 0))
-    model = str(result.get("model", agent.model))
-    output_kind = str(result.get("output_kind", "general"))
-    validation_warning = str(result.get("validation_warning", "")).strip()
-
-    if stream_state["text"]:
-        response_full = stream_state["text"]
-
-    agent.prompt_tokens += p_tok
-    agent.completion_tokens += c_tok
-    agent.total_tokens = agent.prompt_tokens + agent.completion_tokens
-    agent.llm_calls += 1
-    agent.latency_ms += latency
-    agent.progress = 1.0
-    agent.output_preview = response_full[:OUTPUT_PREVIEW_LIMIT]
-    agent.last_message = response_full[:LAST_MESSAGE_LIMIT]
-    agent.model = model
-    agent.status = "done"
-    agent.completed_at = now_ms()
-    ctrl.agent_outputs[aid] = response_full
-
-    run.total_prompt_tokens += p_tok
-    run.total_completion_tokens += c_tok
-    run.total_tokens = run.total_prompt_tokens + run.total_completion_tokens
-    run.total_llm_calls += 1
-
-    await bus.publish_run_update(run)
-    await _emit(
-        run.run_id,
-        "agent_llm_call",
-        agent=aid,
-        message=response_full[:LAST_MESSAGE_LIMIT],
-        data={
-            "call_id": call_id,
-            "agent_id": aid,
-            "step_index": idx + 1,
-            "output_kind": output_kind,
-            "prompt_full": prompt_full,
-            "response_full": response_full,
-            "prompt_tokens": p_tok,
-            "completion_tokens": c_tok,
-            "latency_ms": latency,
-            "model": model,
-            "token_usage": {"prompt": p_tok, "completion": c_tok, "total": p_tok + c_tok},
-        },
-    )
-    _persist_agent_call(
-        run_id=run.run_id,
-        agent_id=aid,
-        step_index=idx + 1,
-        call_id=call_id,
-        prompt_full=prompt_full,
-        response_full=response_full,
-        meta={
-            "mode": run.mode,
-            "output_kind": output_kind,
-            "model": model,
-            "prompt_tokens": p_tok,
-            "completion_tokens": c_tok,
-            "latency_ms": latency,
-            "step_index": idx + 1,
-        },
-    )
-    if validation_warning:
-        await _emit(
-            run.run_id,
-            "agent_validation_warning",
-            agent=aid,
-            message=validation_warning,
-            data={"agent_id": aid, "output_kind": output_kind},
-        )
-    await _emit(
-        run.run_id,
-        "agent_completed",
-        agent=aid,
-        message=f"{agent.name} 完成（token {agent.total_tokens:,}）",
-        data={"output_preview": agent.output_preview, "total_tokens": agent.total_tokens},
-    )
-    return False
+            _persist_agent_call(
+                run_id=run.run_id,
+                agent_id=aid,
+                step_index=idx + 1,
+                call_id=call_id,
+                prompt_full=prompt_full,
+                response_full=response_full,
+                meta={
+                    "mode": run.mode,
+                    "output_kind": output_kind,
+                    "model": model,
+                    "prompt_tokens": p_tok,
+                    "completion_tokens": c_tok,
+                    "latency_ms": latency,
+                    "step_index": idx + 1,
+                    "retry_count": agent.retry_count,
+                },
+            )
+            if validation_warning:
+                await _emit(
+                    run.run_id,
+                    "agent_validation_warning",
+                    agent=aid,
+                    message=validation_warning,
+                    data={"agent_id": aid, "output_kind": output_kind},
+                )
+            await _emit(
+                run.run_id,
+                "agent_completed",
+                agent=aid,
+                message=f"{agent.name} 完成（token {agent.total_tokens:,}）",
+                data={
+                    "output_preview": agent.output_preview,
+                    "total_tokens": agent.total_tokens,
+                    "retry_count": agent.retry_count,
+                },
+            )
+            return False

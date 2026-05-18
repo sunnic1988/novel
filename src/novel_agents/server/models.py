@@ -130,6 +130,7 @@ class AgentStatus(BaseModel):
     total_tokens: int = 0
     llm_calls: int = 0
     tool_calls: int = 0
+    retry_count: int = 0
     latency_ms: int = 0
     started_at: int | None = None
     completed_at: int | None = None
@@ -181,6 +182,17 @@ class StartRunRequest(BaseModel):
     best_of_n: int = 1
     enabled_agents: list[str] | None = None  # None 表示全启用
     budget_usd: float | None = None  # 单次 run 的预算上限
+
+
+class OutlineChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class OutlineChatRequest(BaseModel):
+    messages: list[OutlineChatMessage] = Field(default_factory=list)
+    chapter_num: int = 1
+    script_id: str = "default"
 
 
 class InterventionRequest(BaseModel):

@@ -7,6 +7,7 @@ import {
   Cpu,
   Hash,
   KeyRound,
+  MessageSquarePlus,
   Pause,
   Play,
   Rocket,
@@ -49,6 +50,7 @@ export function HeroPanel({
   onPause,
   onResume,
   onAbort,
+  onOpenOutlineWizard,
 }: {
   status: StatusInfo | null;
   run: RunSummary | null;
@@ -58,6 +60,7 @@ export function HeroPanel({
   onPause: () => void;
   onResume: () => void;
   onAbort: () => void;
+  onOpenOutlineWizard: () => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -225,6 +228,12 @@ export function HeroPanel({
           )}
 
           <div className="col-span-2 mt-1 flex items-center gap-2">
+            {!isRunning && (
+              <button onClick={onOpenOutlineWizard} className="btn-ghost">
+                <MessageSquarePlus size={14} />
+                AI 引导大纲
+              </button>
+            )}
             {!isRunning && (
               <motion.button
                 whileTap={{ scale: 0.97 }}

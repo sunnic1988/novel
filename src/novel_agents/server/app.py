@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from novel_agents.book import (
     character_runtime,
@@ -43,6 +43,7 @@ from novel_agents.book.paths import (
     use_script,
 )
 from novel_agents.server.events import bus
+from novel_agents.core.llm_gateway import stream_outline_chat
 from novel_agents.server.models import (
     AGENT_META,
     AGENT_ORDER,
@@ -52,6 +53,7 @@ from novel_agents.server.models import (
     ForeshadowingItem,
     HighlightItem,
     InterventionRequest,
+    OutlineChatRequest,
     ReferenceCreateRequest,
     StartRunRequest,
     SynopsisRequest,
@@ -162,6 +164,34 @@ def create_app() -> FastAPI:
             models,
             enabled=enabled,
             best_of_n=max(1, min(req.best_of_n, 5)),
+        )
+
+    @app.post("/api/outline/chat")
+    def outline_chat(req: OutlineChatRequest) -> StreamingResponse:
+        import os
+
+        if not os.getenv("APIMART_API_KEY"):
+            raise HTTPException(400, "APIMART_API_KEY is required")
+
+        def event_stream() -> Any:
+            try:
+                msg_payload = [m.model_dump() for m in req.messages]
+                for chunk in stream_outline_chat(msg_payload, req.chapter_num):
+                    payload = {"type": "delta", "delta": chunk}
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+            except Exception as exc:
+                payload = {"type": "error", "detail": str(exc)}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     @app.get("/api/runs")
@@ -300,6 +330,13 @@ def create_app() -> FastAPI:
         ok = await manager.apply_intervention(
             run_id, agent_id, req.edited_output, req.resume
         )
+        if not ok:
+            raise HTTPException(404, "run not found")
+        return {"ok": True}
+
+    @app.post("/api/runs/{run_id}/agents/{agent_id}/retry")
+    async def retry_agent(run_id: str, agent_id: str) -> dict[str, Any]:
+        ok = await manager.request_retry(run_id, agent_id)
         if not ok:
             raise HTTPException(404, "run not found")
         return {"ok": True}

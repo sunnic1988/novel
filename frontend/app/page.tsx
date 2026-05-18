@@ -12,6 +12,7 @@ import { ForeshadowingLedger } from "@/components/ForeshadowingLedger";
 import { HeroPanel, type PipelineRequest } from "@/components/HeroPanel";
 import { InterventionDrawer } from "@/components/InterventionDrawer";
 import { MarketingPanel } from "@/components/MarketingPanel";
+import { OutlineWizard } from "@/components/OutlineWizard";
 import { ReferenceManager } from "@/components/ReferenceManager";
 import { RunArchivePanel } from "@/components/RunArchivePanel";
 import { ScriptManager } from "@/components/ScriptManager";
@@ -61,6 +62,7 @@ export default function Page() {
   const [activeRun, setActiveRun] = useState<RunSummary | null>(null);
   const [eventsByRunId, setEventsByRunId] = useState<Record<string, TraceEvent[]>>({});
   const [interveneAgent, setInterveneAgent] = useState<AgentStatus | null>(null);
+  const [outlineWizardOpen, setOutlineWizardOpen] = useState(false);
   const [bookRefreshKey, setBookRefreshKey] = useState(0);
   const [evidenceTab, setEvidenceTab] = useState<"logs" | "references" | "ops" | "archives">("logs");
   const wsRef = useRef<WebSocket | null>(null);
@@ -121,6 +123,39 @@ export default function Page() {
         });
       },
       onEvent: (e) => {
+        if (e.type === "agent_retry_attempt" && e.agent) {
+          setActiveRun((cur) => {
+            if (!cur || cur.run_id !== e.run_id) return cur;
+            return {
+              ...cur,
+              agents: cur.agents.map((a) =>
+                a.id === e.agent
+                  ? {
+                      ...a,
+                      status: "running",
+                      retry_count: Number(e.data?.attempt || a.retry_count),
+                      last_message: e.message || a.last_message,
+                    }
+                  : a
+              ),
+            };
+          });
+        }
+        if (e.type === "agent_retry_exhausted" && e.agent) {
+          setActiveRun((cur) => {
+            if (!cur || cur.run_id !== e.run_id) return cur;
+            return {
+              ...cur,
+              status: "paused",
+              paused_at_agent: e.agent,
+              agents: cur.agents.map((a) =>
+                a.id === e.agent
+                  ? { ...a, status: "error", last_message: e.message || a.last_message }
+                  : a
+              ),
+            };
+          });
+        }
         setEventsByRunId((cur) => {
           const runEvents = cur[e.run_id] || [];
           if (runEvents.some((c) => c.id === e.id)) return cur;
@@ -221,6 +256,14 @@ export default function Page() {
     [activeRun, interveneAgent]
   );
 
+  const handleRetryAgent = useCallback(
+    async (agent: AgentStatus) => {
+      if (!activeRun) return;
+      await api.retryAgent(activeRun.run_id, agent.id);
+    },
+    [activeRun]
+  );
+
   const currentChapter = activeRun?.chapter_num ?? config.chapter_num;
   const events = activeRun ? eventsByRunId[activeRun.run_id] || [] : [];
   const currentAgent = useMemo(() => {
@@ -291,6 +334,7 @@ export default function Page() {
           onPause={handlePause}
           onResume={handleResume}
           onAbort={handleAbort}
+          onOpenOutlineWizard={() => setOutlineWizardOpen(true)}
         />
 
         <div className="mt-5 flex items-center gap-2">
@@ -352,6 +396,7 @@ export default function Page() {
                       index={0}
                       isInterveneAvailable
                       onIntervene={(ag) => setInterveneAgent(ag)}
+                      onRetry={handleRetryAgent}
                     />
                     <div className="rounded-xl border border-white/10 bg-black/30 p-3">
                       <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">
@@ -452,6 +497,20 @@ export default function Page() {
         agent={interveneAgent}
         onClose={() => setInterveneAgent(null)}
         onSubmit={handleIntervene}
+      />
+      <OutlineWizard
+        open={outlineWizardOpen}
+        chapterNum={config.chapter_num}
+        scriptId={currentScriptId}
+        onClose={() => setOutlineWizardOpen(false)}
+        onApplyOutline={(outline) => {
+          const nextConfig = { ...config, synopsis_override: outline };
+          setConfig(nextConfig);
+          setOutlineWizardOpen(false);
+          if (confirm("大纲已写入本次运行配置，是否立即启动 9-Agent 流水线？")) {
+            void handleStart(nextConfig);
+          }
+        }}
       />
     </>
   );

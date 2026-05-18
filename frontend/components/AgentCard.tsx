@@ -33,6 +33,7 @@ export interface AgentCardProps {
   agent: AgentStatus;
   index: number;
   onIntervene?: (agent: AgentStatus) => void;
+  onRetry?: (agent: AgentStatus) => void;
   isInterveneAvailable?: boolean;
 }
 
@@ -40,6 +41,7 @@ export function AgentCard({
   agent,
   index,
   onIntervene,
+  onRetry,
   isInterveneAvailable,
 }: AgentCardProps) {
   const Icon = getAgentIcon(agent.icon);
@@ -183,8 +185,10 @@ export function AgentCard({
             transition={{ duration: 0.25 }}
             className="line-clamp-2"
           >
-            {agent.last_message || (
-              <span className="text-slate-600">— 等待启动 —</span>
+            {agent.status === "running" && agent.retry_count > 0 ? (
+              <span>{`第 ${agent.retry_count} 次重试中… ${agent.last_message}`}</span>
+            ) : (
+              agent.last_message || <span className="text-slate-600">— 等待启动 —</span>
             )}
           </motion.div>
         </AnimatePresence>
@@ -210,6 +214,14 @@ export function AgentCard({
           <Edit3 size={12} />
           人工干预
         </button>
+        {agent.status === "error" && (
+          <button
+            onClick={() => onRetry?.(agent)}
+            className="btn !py-1.5 !px-2.5 !text-[11px] bg-rose-400/15 border border-rose-300/40 text-rose-100 hover:bg-rose-400/25"
+          >
+            重试
+          </button>
+        )}
       </div>
 
       <AnimatePresence initial={false}>

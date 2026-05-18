@@ -34,7 +34,11 @@ def use_script(script_id: str):
     try:
         yield
     finally:
-        ACTIVE_SCRIPT_ID.reset(token)
+        try:
+            ACTIVE_SCRIPT_ID.reset(token)
+        except ValueError:
+            # 流式/线程切换时可能跨 Context 关闭，兜底回到默认剧本。
+            ACTIVE_SCRIPT_ID.set("default")
 
 
 def script_root(script_id: str | None = None) -> Path:

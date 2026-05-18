@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import Any
+from typing import Any, Iterator
 
 import litellm
 from crewai import LLM
@@ -15,6 +15,14 @@ APIMART_BASE_URL = "https://api.apimart.ai/v1"
 
 def _get_api_key() -> str:
     return os.getenv("APIMART_API_KEY", "")
+
+
+def _clean_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    """移除尾部 assistant prefill，兼容 APIMart Claude/DeepSeek 路由。"""
+    cleaned_messages = list(messages)
+    while cleaned_messages and cleaned_messages[-1].get("role") == "assistant":
+        cleaned_messages.pop()
+    return cleaned_messages or messages
 
 
 class APIMartLLM(LLM):
@@ -30,11 +38,7 @@ class APIMartLLM(LLM):
         stream_callback = kwargs.pop("stream_callback", None)
         # APIMart的Claude端点不支持assistant message prefill
         # 如果最后一条消息是assistant角色，需要移除（CrewAI内部行为）
-        cleaned_messages = list(messages)
-        while cleaned_messages and cleaned_messages[-1].get("role") == "assistant":
-            cleaned_messages.pop()
-        if not cleaned_messages:
-            cleaned_messages = messages
+        cleaned_messages = _clean_messages(messages)
 
         params: dict[str, Any] = {
             "model": self.model,
@@ -118,3 +122,34 @@ LLM_ASSIGNMENT = {
     "reader_sim": get_analytical_llm,
     "marketing_specialist": get_creative_llm,
 }
+
+
+def stream_outline_chat(messages: list[dict[str, str]], chapter_num: int = 1) -> Iterator[str]:
+    """流式生成大纲引导对话；前端通过 SSE 实时消费。"""
+    system_prompt = (
+        "你是资深玄幻修仙小说编辑。你的任务分两阶段：\n"
+        "1) 引导用户补齐创作偏好（主角设定、核心冲突、必须出现桥段、风格节奏）；\n"
+        "2) 当信息足够，或用户明确说“生成大纲”时，输出结构化章节大纲。\n\n"
+        "规则：\n"
+        "- 信息不足时只提 1-2 个关键追问，问题要短、具体。\n"
+        "- 当你判断可以产出时，直接输出 Markdown，且必须包含标题“## 大纲”。\n"
+        "- 大纲需包含：本章目标、冲突升级链路、关键场景分解（3-6个）、角色推进、章末钩子。\n"
+        f"- 当前目标章节：第 {chapter_num} 章。\n"
+    )
+    payload_messages = [{"role": "system", "content": system_prompt}]
+    payload_messages.extend(_clean_messages(messages))
+    response = litellm.completion(
+        model="openai/deepseek-v4-pro",
+        messages=payload_messages,
+        temperature=0.6,
+        max_tokens=4096,
+        stream=True,
+        api_key=_get_api_key(),
+        api_base=APIMART_BASE_URL,
+    )
+    for chunk in response:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta and delta.content:
+            yield delta.content

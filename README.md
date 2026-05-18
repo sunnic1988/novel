@@ -30,7 +30,7 @@ novel ingest
 novel status
 
 # 创作第一章
-novel write 1 -t "少年入门"
+novel write 1 -t ""
 ```
 
 ## Agent角色分工
