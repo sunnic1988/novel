@@ -29,9 +29,11 @@ const IMP_TONE: Record<string, string> = {
 
 export function ForeshadowingLedger({
   currentChapter,
+  scriptId,
   refreshKey = 0,
 }: {
   currentChapter?: number;
+  scriptId: string;
   refreshKey?: number;
 }) {
   const [items, setItems] = useState<ForeshadowingItem[]>([]);
@@ -47,7 +49,7 @@ export function ForeshadowingLedger({
 
   const refresh = () =>
     api
-      .listForeshadowing(currentChapter)
+      .listForeshadowing(currentChapter, scriptId)
       .then((r) => {
         setItems(r.items);
         setStats(r.stats);
@@ -56,11 +58,11 @@ export function ForeshadowingLedger({
 
   useEffect(() => {
     refresh();
-  }, [currentChapter, refreshKey]);
+  }, [currentChapter, refreshKey, scriptId]);
 
   const handleAdd = async () => {
     if (!draft.title) return;
-    await api.upsertForeshadowing(draft as ForeshadowingItem);
+    await api.upsertForeshadowing(draft as ForeshadowingItem, scriptId);
     setDraft({
       title: "",
       planted_chapter: currentChapter || 1,
@@ -75,7 +77,7 @@ export function ForeshadowingLedger({
   const handleDelete = async (id?: string) => {
     if (!id) return;
     if (!confirm(`删除伏笔 ${id}？`)) return;
-    await api.deleteForeshadowing(id);
+    await api.deleteForeshadowing(id, scriptId);
     refresh();
   };
 
@@ -84,7 +86,7 @@ export function ForeshadowingLedger({
       ...it,
       status: "paid_off",
       payoff_chapter: currentChapter || it.planted_chapter,
-    });
+    }, scriptId);
     refresh();
   };
 

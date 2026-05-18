@@ -40,6 +40,8 @@ export interface AgentStatus {
 
 export interface RunSummary {
   run_id: string;
+  script_id: string;
+  script_name: string;
   chapter_num: number;
   chapter_title: string;
   mode: "live" | "mock";
@@ -88,6 +90,15 @@ export interface RunArtifactItem {
   size: number;
   modified: number;
   type: string;
+}
+
+export interface ScriptItem {
+  id: string;
+  name: string;
+  description: string;
+  archived: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface ForeshadowingItem {

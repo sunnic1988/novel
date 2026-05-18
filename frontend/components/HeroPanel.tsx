@@ -17,14 +17,15 @@ import { useState } from "react";
 import type { RunSummary, StatusInfo } from "@/lib/types";
 
 export interface PipelineRequest {
+  script_id: string;
   chapter_num: number;
   chapter_title: string;
+  synopsis_override: string;
   auto_run: boolean;
   mode: "live";
   is_opening: boolean;
   best_of_n: number;
   enabled_agents: string[];
-  budget_usd: number | null;
 }
 
 const ALL_AGENTS = [
@@ -146,6 +147,21 @@ export function HeroPanel({
               {config.auto_run ? "自动连续" : "逐 Agent 人工确认"}
             </button>
           </Field>
+          <div className="col-span-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
+            <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-slate-500">
+              剧情想法（本次运行覆盖）
+            </div>
+            <textarea
+              value={config.synopsis_override}
+              onChange={(e) => setCfg({ synopsis_override: e.target.value })}
+              rows={4}
+              placeholder="在这里填你的核心剧情想法、主线冲突、角色关系、本章必出桥段..."
+              className="mt-1 w-full resize-y rounded-md border border-white/10 bg-black/40 px-2 py-1 text-[12px] leading-relaxed text-slate-100 outline-none focus:border-cyan-300/40"
+            />
+            <div className="mt-1 text-[10px] text-slate-500">
+              留空则读取当前剧本的 synopsis 文件；填写后仅覆盖本次运行。
+            </div>
+          </div>
 
           <div className="col-span-2 flex flex-wrap items-center gap-1">
             <button

@@ -22,7 +22,7 @@ from typing import Any
 
 import yaml
 
-from novel_agents.book.paths import FORESHADOWING_FILE
+from novel_agents.book.paths import foreshadowing_file
 
 
 def _empty_ledger() -> dict[str, Any]:
@@ -30,10 +30,11 @@ def _empty_ledger() -> dict[str, Any]:
 
 
 def load_ledger() -> dict[str, Any]:
-    if not FORESHADOWING_FILE.exists():
+    fp = foreshadowing_file()
+    if not fp.exists():
         return _empty_ledger()
     try:
-        data = yaml.safe_load(FORESHADOWING_FILE.read_text(encoding="utf-8"))
+        data = yaml.safe_load(fp.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or "items" not in data:
             return _empty_ledger()
         return data
@@ -42,8 +43,9 @@ def load_ledger() -> dict[str, Any]:
 
 
 def save_ledger(ledger: dict[str, Any]) -> None:
-    FORESHADOWING_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FORESHADOWING_FILE.write_text(
+    fp = foreshadowing_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fp.write_text(
         yaml.safe_dump(ledger, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )

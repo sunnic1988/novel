@@ -31,8 +31,9 @@ from novel_agents.book import (
     titles as titles_mod,
 )
 from novel_agents.book.ai_taste import analyze as ai_taste_analyze
-from novel_agents.book.paths import ai_lint_path, ensure_dirs
+from novel_agents.book.paths import ai_lint_path, ensure_dirs, use_script
 from novel_agents.server.events import bus
+from novel_agents.server import storage_sqlite
 from novel_agents.server.mock_data import (
     MOCK_AI_LINT_SAMPLE,
     MOCK_CHARACTER_UPDATES,
@@ -137,6 +138,8 @@ class RunManager:
         ]
         run = RunSummary(
             run_id=run_id,
+            script_id=req.script_id,
+            script_name="默认剧本",
             chapter_num=req.chapter_num,
             chapter_title=req.chapter_title,
             mode=req.mode,
@@ -144,6 +147,9 @@ class RunManager:
             status="queued",
             agents=agents,
         )
+        script = storage_sqlite.get_script(req.script_id)
+        if script:
+            run.script_name = str(script.get("name") or "默认剧本")
         bus.upsert_run(run)
         ctrl = RunController(run)
         ctrl.is_opening = req.is_opening
@@ -307,106 +313,109 @@ def _write_run_state(run: RunSummary) -> None:
 
 async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
     run = ctrl.run
-    run.status = "running"
-    run.started_at = now_ms()
-    _write_run_manifest(ctrl)
-    _write_run_state(run)
-    await bus.publish_run_update(run)
-
-    # 成本预估
-    enabled_models = {
-        a.id: a.model for a in run.agents if a.id in ctrl.enabled_agents
-    }
-    cost_estimate = cost_mod.estimate_chapter_cost(
-        enabled_models, enabled=ctrl.enabled_agents, best_of_n=ctrl.best_of_n
-    )
-    await _emit(
-        run.run_id,
-        "cost_estimate",
-        message=(
-            f"💰 本章预估成本 ${cost_estimate['total_cost_usd']:.3f} "
-            f"({cost_estimate['total_tokens']:,} tokens, best_of_n={ctrl.best_of_n})"
-        ),
-        data=cost_estimate,
-    )
-    if ctrl.budget_usd is not None and cost_estimate["total_cost_usd"] > ctrl.budget_usd:
-        await _emit(
-            run.run_id,
-            "cost_warning",
-            message=(
-                f"⚠️ 预估成本 ${cost_estimate['total_cost_usd']:.3f} 已超过预算 "
-                f"${ctrl.budget_usd:.3f}，继续执行（如需中止请点终止）。"
-            ),
-            data={"budget": ctrl.budget_usd, "estimate": cost_estimate["total_cost_usd"]},
-        )
-
-    await _emit(
-        run.run_id,
-        "run_started",
-        message=(
-            f"开始创作第 {run.chapter_num} 章 「{run.chapter_title or '未命名'}」 "
-            f"(mode={run.mode}, is_opening={ctrl.is_opening}, best_of_n={ctrl.best_of_n}, "
-            f"step_confirm={ctrl.step_confirm_mode})"
-        ),
-        data={
-            "chapter_num": run.chapter_num,
-            "title": run.chapter_title,
-            "mode": run.mode,
-            "is_opening": ctrl.is_opening,
-            "best_of_n": ctrl.best_of_n,
-            "step_confirm_mode": ctrl.step_confirm_mode,
-            "enabled_agents": list(ctrl.enabled_agents),
-        },
-    )
-
-    try:
-        if run.mode == "live":
-            ok = await _run_live(ctrl, req)
-            if not ok:
-                run.status = "error"
-                _write_run_state(run)
-                await bus.publish_run_update(run)
-                return
-        else:
-            await _run_mock(ctrl)
-
-        if ctrl.abort_event.is_set():
-            return
-
-        # 章节副产物入账（mock / live 均执行；live 下 KPI 由 reviewer 给）
-        try:
-            await _persist_chapter_artifacts(ctrl)
-        except Exception as exc:  # pragma: no cover
-            await _emit(run.run_id, "run_error", message=f"账本写入失败: {exc}")
-
-        run.status = "completed"
-        run.completed_at = now_ms()
+    with use_script(run.script_id):
+        run.status = "running"
+        run.started_at = now_ms()
+        _write_run_manifest(ctrl)
         _write_run_state(run)
         await bus.publish_run_update(run)
+
+        # 成本预估
+        enabled_models = {
+            a.id: a.model for a in run.agents if a.id in ctrl.enabled_agents
+        }
+        cost_estimate = cost_mod.estimate_chapter_cost(
+            enabled_models, enabled=ctrl.enabled_agents, best_of_n=ctrl.best_of_n
+        )
         await _emit(
             run.run_id,
-            "run_completed",
+            "cost_estimate",
             message=(
-                f"流水线完成，总 token: {run.total_tokens:,}"
-                f"，预估成本 ${cost_estimate['total_cost_usd']:.3f}"
+                f"💰 本章预估成本 ${cost_estimate['total_cost_usd']:.3f} "
+                f"({cost_estimate['total_tokens']:,} tokens, best_of_n={ctrl.best_of_n})"
+            ),
+            data=cost_estimate,
+        )
+        if ctrl.budget_usd is not None and cost_estimate["total_cost_usd"] > ctrl.budget_usd:
+            await _emit(
+                run.run_id,
+                "cost_warning",
+                message=(
+                    f"⚠️ 预估成本 ${cost_estimate['total_cost_usd']:.3f} 已超过预算 "
+                    f"${ctrl.budget_usd:.3f}，继续执行（如需中止请点终止）。"
+                ),
+                data={"budget": ctrl.budget_usd, "estimate": cost_estimate["total_cost_usd"]},
+            )
+
+        await _emit(
+            run.run_id,
+            "run_started",
+            message=(
+                f"开始创作第 {run.chapter_num} 章 「{run.chapter_title or '未命名'}」 "
+                f"(script={run.script_name}, mode={run.mode}, is_opening={ctrl.is_opening}, best_of_n={ctrl.best_of_n}, "
+                f"step_confirm={ctrl.step_confirm_mode})"
             ),
             data={
-                "total_tokens": run.total_tokens,
-                "prompt_tokens": run.total_prompt_tokens,
-                "completion_tokens": run.total_completion_tokens,
-                "cost_usd": cost_estimate["total_cost_usd"],
+                "script_id": run.script_id,
+                "script_name": run.script_name,
+                "chapter_num": run.chapter_num,
+                "title": run.chapter_title,
+                "mode": run.mode,
+                "is_opening": ctrl.is_opening,
+                "best_of_n": ctrl.best_of_n,
+                "step_confirm_mode": ctrl.step_confirm_mode,
+                "enabled_agents": list(ctrl.enabled_agents),
             },
         )
-    except asyncio.CancelledError:
-        run.status = "aborted"
-        _write_run_state(run)
-        await bus.publish_run_update(run)
-        raise
-    except Exception as exc:  # pragma: no cover
-        run.status = "error"
-        _write_run_state(run)
-        await bus.publish_run_update(run)
-        await _emit(run.run_id, "run_error", message=f"流水线异常: {exc}")
+
+        try:
+            if run.mode == "live":
+                ok = await _run_live(ctrl, req)
+                if not ok:
+                    run.status = "error"
+                    _write_run_state(run)
+                    await bus.publish_run_update(run)
+                    return
+            else:
+                await _run_mock(ctrl)
+
+            if ctrl.abort_event.is_set():
+                return
+
+            # 章节副产物入账（mock / live 均执行；live 下 KPI 由 reviewer 给）
+            try:
+                await _persist_chapter_artifacts(ctrl)
+            except Exception as exc:  # pragma: no cover
+                await _emit(run.run_id, "run_error", message=f"账本写入失败: {exc}")
+
+            run.status = "completed"
+            run.completed_at = now_ms()
+            _write_run_state(run)
+            await bus.publish_run_update(run)
+            await _emit(
+                run.run_id,
+                "run_completed",
+                message=(
+                    f"流水线完成，总 token: {run.total_tokens:,}"
+                    f"，预估成本 ${cost_estimate['total_cost_usd']:.3f}"
+                ),
+                data={
+                    "total_tokens": run.total_tokens,
+                    "prompt_tokens": run.total_prompt_tokens,
+                    "completion_tokens": run.total_completion_tokens,
+                    "cost_usd": cost_estimate["total_cost_usd"],
+                },
+            )
+        except asyncio.CancelledError:
+            run.status = "aborted"
+            _write_run_state(run)
+            await bus.publish_run_update(run)
+            raise
+        except Exception as exc:  # pragma: no cover
+            run.status = "error"
+            _write_run_state(run)
+            await bus.publish_run_update(run)
+            await _emit(run.run_id, "run_error", message=f"流水线异常: {exc}")
 
 
 async def _run_mock(ctrl: RunController) -> None:
@@ -842,6 +851,7 @@ async def _execute_live_agent(
             dict(ctrl.agent_outputs),
             ctrl.is_opening,
             _stream_callback,
+            run.script_id,
         )
     except Exception as exc:
         agent.status = "error"
@@ -856,6 +866,8 @@ async def _execute_live_agent(
     c_tok = int(result.get("completion_tokens", 0))
     latency = int(result.get("latency_ms", 0))
     model = str(result.get("model", agent.model))
+    output_kind = str(result.get("output_kind", "general"))
+    validation_warning = str(result.get("validation_warning", "")).strip()
 
     if stream_state["text"]:
         response_full = stream_state["text"]
@@ -888,6 +900,7 @@ async def _execute_live_agent(
             "call_id": call_id,
             "agent_id": aid,
             "step_index": idx + 1,
+            "output_kind": output_kind,
             "prompt_full": prompt_full,
             "response_full": response_full,
             "prompt_tokens": p_tok,
@@ -906,6 +919,7 @@ async def _execute_live_agent(
         response_full=response_full,
         meta={
             "mode": run.mode,
+            "output_kind": output_kind,
             "model": model,
             "prompt_tokens": p_tok,
             "completion_tokens": c_tok,
@@ -913,6 +927,14 @@ async def _execute_live_agent(
             "step_index": idx + 1,
         },
     )
+    if validation_warning:
+        await _emit(
+            run.run_id,
+            "agent_validation_warning",
+            agent=aid,
+            message=validation_warning,
+            data={"agent_id": aid, "output_kind": output_kind},
+        )
     await _emit(
         run.run_id,
         "agent_completed",

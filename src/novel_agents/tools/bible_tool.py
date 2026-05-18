@@ -1,11 +1,8 @@
 """故事圣经读取工具 — 读取人物卡、世界观、力量体系等设定"""
 
-from pathlib import Path
-
 from crewai.tools import BaseTool
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-BIBLE_DIR = PROJECT_ROOT / "bible"
+from novel_agents.book.paths import bible_dir
 
 
 class BibleReaderTool(BaseTool):
@@ -19,26 +16,27 @@ class BibleReaderTool(BaseTool):
     def _run(self, category: str = "all") -> str:
         category = category.strip().lower()
         output_parts = []
+        current_bible = bible_dir()
 
         if category in ("all", "characters", "人物"):
-            chars_dir = BIBLE_DIR / "characters"
+            chars_dir = current_bible / "characters"
             if chars_dir.exists():
                 for f in sorted(chars_dir.glob("*.md")):
                     output_parts.append(f"## 人物：{f.stem}\n{f.read_text(encoding='utf-8')}")
 
         if category in ("all", "worldview", "世界观"):
-            wv_dir = BIBLE_DIR / "worldview"
+            wv_dir = current_bible / "worldview"
             if wv_dir.exists():
                 for f in sorted(wv_dir.glob("*.md")):
                     output_parts.append(f"## 世界观：{f.stem}\n{f.read_text(encoding='utf-8')}")
 
         if category in ("all", "power_system", "力量体系"):
-            ps_file = BIBLE_DIR / "power_system.md"
+            ps_file = current_bible / "power_system.md"
             if ps_file.exists():
                 output_parts.append(f"## 力量体系\n{ps_file.read_text(encoding='utf-8')}")
 
         if category in ("all", "style_guide", "文风指南"):
-            sg_file = BIBLE_DIR / "style_guide.md"
+            sg_file = current_bible / "style_guide.md"
             if sg_file.exists():
                 output_parts.append(f"## 文风指南\n{sg_file.read_text(encoding='utf-8')}")
 

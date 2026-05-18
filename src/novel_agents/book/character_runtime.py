@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from novel_agents.book.paths import CHARACTERS_DIR, character_runtime_path
+from novel_agents.book.paths import character_runtime_path, characters_dir
 
 
 def load_runtime(name: str) -> dict[str, Any]:
@@ -53,9 +53,10 @@ def append_snapshot(name: str, chapter: int, snapshot: dict[str, Any]) -> dict[s
 
 def list_all() -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    if not CHARACTERS_DIR.exists():
+    chars_dir = characters_dir()
+    if not chars_dir.exists():
         return out
-    for f in sorted(CHARACTERS_DIR.glob("*.runtime.yaml")):
+    for f in sorted(chars_dir.glob("*.runtime.yaml")):
         try:
             data = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
             out.append(data)

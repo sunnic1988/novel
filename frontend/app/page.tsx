@@ -14,11 +14,13 @@ import { InterventionDrawer } from "@/components/InterventionDrawer";
 import { MarketingPanel } from "@/components/MarketingPanel";
 import { ReferenceManager } from "@/components/ReferenceManager";
 import { RunArchivePanel } from "@/components/RunArchivePanel";
+import { ScriptManager } from "@/components/ScriptManager";
 import { TracePanel } from "@/components/TracePanel";
 import { api, openEventStream } from "@/lib/api";
 import type {
   AgentStatus,
   RunSummary,
+  ScriptItem,
   StatusInfo,
   TraceEvent,
 } from "@/lib/types";
@@ -54,55 +56,75 @@ type Tab = "pipeline" | "book";
 export default function Page() {
   const [tab, setTab] = useState<Tab>("pipeline");
   const [status, setStatus] = useState<StatusInfo | null>(null);
+  const [scripts, setScripts] = useState<ScriptItem[]>([]);
+  const [currentScriptId, setCurrentScriptId] = useState<string>("default");
   const [activeRun, setActiveRun] = useState<RunSummary | null>(null);
-  const [events, setEvents] = useState<TraceEvent[]>([]);
+  const [eventsByRunId, setEventsByRunId] = useState<Record<string, TraceEvent[]>>({});
   const [interveneAgent, setInterveneAgent] = useState<AgentStatus | null>(null);
   const [bookRefreshKey, setBookRefreshKey] = useState(0);
   const [evidenceTab, setEvidenceTab] = useState<"logs" | "references" | "ops" | "archives">("logs");
   const wsRef = useRef<WebSocket | null>(null);
 
   const [config, setConfig] = useState<PipelineRequest>({
+    script_id: "default",
     chapter_num: 1,
     chapter_title: "少年入门",
+    synopsis_override: "",
     auto_run: false,
     mode: "live",
     is_opening: true,
     best_of_n: 1,
     enabled_agents: AGENT_ORDER,
-    budget_usd: null,
   });
 
   useEffect(() => {
-    api.status().then(setStatus).catch(() => {});
+    api.status(currentScriptId).then(setStatus).catch(() => {});
     api
-      .listRuns()
-      .then((r) => {
-        if (r.runs.length > 0) {
-          const newest = r.runs[0];
-          setActiveRun(newest);
-          api.getEvents(newest.run_id).then((res) => setEvents(res.events));
+      .listScripts()
+      .then((res) => {
+        setScripts(res.items);
+        if (res.items.length > 0) {
+          setCurrentScriptId((cur) => cur || res.items[0].id);
+          setConfig((cur) => ({ ...cur, script_id: cur.script_id || res.items[0].id }));
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
+    if (!currentScriptId) return;
+    api
+      .listRuns(currentScriptId)
+      .then((r) => {
+        const newest = r.runs[0] ?? null;
+        setActiveRun(newest);
+        if (newest) {
+          api.getEvents(newest.run_id).then((res) =>
+            setEventsByRunId((cur) => ({ ...cur, [newest.run_id]: res.events }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, [currentScriptId]);
+
+  useEffect(() => {
     const ws = openEventStream({
       onSnapshot: (runs) => {
-        if (runs.length > 0 && !activeRun) setActiveRun(runs[0]);
+        const scoped = runs.filter((r) => r.script_id === currentScriptId);
+        if (scoped.length > 0 && !activeRun) setActiveRun(scoped[0]);
       },
       onRunUpdate: (run) => {
+        if (run.script_id !== currentScriptId) return;
         setActiveRun((cur) => {
           if (!cur || cur.run_id === run.run_id) return run;
           return run.created_at >= cur.created_at ? run : cur;
         });
       },
       onEvent: (e) => {
-        setEvents((cur) => {
-          if (!activeRunRef.current || activeRunRef.current.run_id !== e.run_id)
-            return cur;
-          if (cur.some((c) => c.id === e.id)) return cur;
-          const next = [...cur, e];
+        setEventsByRunId((cur) => {
+          const runEvents = cur[e.run_id] || [];
+          if (runEvents.some((c) => c.id === e.id)) return cur;
+          const next = [...runEvents, e];
           // 检测到 artifact_saved / run_completed 时刷新本书数据
           if (
             e.type === "artifact_saved" ||
@@ -110,7 +132,7 @@ export default function Page() {
           ) {
             setBookRefreshKey((k) => k + 1);
           }
-          return next.length > 600 ? next.slice(-600) : next;
+          return { ...cur, [e.run_id]: next };
         });
       },
     });
@@ -120,7 +142,7 @@ export default function Page() {
         ws.close();
       } catch {}
     };
-  }, []);
+  }, [currentScriptId]);
 
   const activeRunRef = useRef<RunSummary | null>(activeRun);
   useEffect(() => {
@@ -132,6 +154,17 @@ export default function Page() {
     const paused = activeRun.agents.find((a) => a.id === activeRun.paused_at_agent) || null;
     if (paused) setInterveneAgent(paused);
   }, [activeRun]);
+
+  useEffect(() => {
+    if (!activeRun) return;
+    if (eventsByRunId[activeRun.run_id]) return;
+    api
+      .getEvents(activeRun.run_id)
+      .then((res) =>
+        setEventsByRunId((cur) => ({ ...cur, [activeRun.run_id]: res.events }))
+      )
+      .catch(() => {});
+  }, [activeRun, eventsByRunId]);
 
   const agentNameOf = useCallback(
     (id: string | null) => {
@@ -154,13 +187,12 @@ export default function Page() {
       ...req,
       step_confirm_mode: !req.auto_run,
     });
-    setEvents([]);
     setActiveRun(r.run);
     activeRunRef.current = r.run;
     setTimeout(async () => {
       try {
         const evs = await api.getEvents(r.run_id);
-        setEvents(evs.events);
+        setEventsByRunId((cur) => ({ ...cur, [r.run_id]: evs.events }));
       } catch {}
     }, 400);
   }, []);
@@ -190,6 +222,7 @@ export default function Page() {
   );
 
   const currentChapter = activeRun?.chapter_num ?? config.chapter_num;
+  const events = activeRun ? eventsByRunId[activeRun.run_id] || [] : [];
   const currentAgent = useMemo(() => {
     if (!activeRun) return null;
     if (activeRun.paused_at_agent) {
@@ -204,11 +237,6 @@ export default function Page() {
     );
   }, [activeRun, orderedAgents]);
   const currentIndex = currentAgent ? AGENT_ORDER.indexOf(currentAgent.id) : -1;
-  const previousAgent = currentIndex > 0 ? orderedAgents[currentIndex - 1] : null;
-  const nextAgent =
-    currentIndex >= 0 && currentIndex < orderedAgents.length - 1
-      ? orderedAgents[currentIndex + 1]
-      : null;
   const quickContinue = useCallback(async () => {
     if (!activeRun || !currentAgent) return;
     await api.intervene(
@@ -223,6 +251,37 @@ export default function Page() {
     <>
       <BackgroundFX />
       <main className="mx-auto max-w-[1600px] px-4 py-6 md:px-8">
+        <ScriptManager
+          scripts={scripts}
+          currentScriptId={currentScriptId}
+          onSelect={(scriptId) => {
+            setCurrentScriptId(scriptId);
+            setConfig((cur) => ({ ...cur, script_id: scriptId }));
+            api.listScriptRuns(scriptId).then((r) => {
+              setActiveRun(r.runs[0] ?? null);
+            });
+          }}
+          onCreate={async (name, description) => {
+            const res = await api.createScript({ name, description });
+            const next = await api.listScripts();
+            setScripts(next.items);
+            setCurrentScriptId(res.item.id);
+            setConfig((cur) => ({ ...cur, script_id: res.item.id }));
+          }}
+          onUpdate={async (scriptId, patch) => {
+            await api.updateScript(scriptId, patch);
+            const next = await api.listScripts();
+            setScripts(next.items);
+          }}
+          onDelete={async (scriptId) => {
+            await api.deleteScript(scriptId);
+            const next = await api.listScripts();
+            setScripts(next.items);
+            const fallback = next.items[0]?.id ?? "default";
+            setCurrentScriptId(fallback);
+            setConfig((cur) => ({ ...cur, script_id: fallback }));
+          }}
+        />
         <HeroPanel
           status={status}
           run={activeRun}
@@ -252,7 +311,7 @@ export default function Page() {
         {tab === "pipeline" ? (
           <div className="mt-4 space-y-4">
             <RunControlBanner run={activeRun} currentAgent={currentAgent} />
-            <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)_320px]">
+            <div className="grid items-start gap-4 xl:grid-cols-[280px_minmax(0,1fr)_300px]">
               <PipelineStepList
                 agents={orderedAgents}
                 run={activeRun}
@@ -307,21 +366,13 @@ export default function Page() {
                   <div className="panel-glow p-6 text-sm text-slate-500">尚未启动 run。</div>
                 )}
               </div>
-              <div className="space-y-4">
-                <ContextPanel
-                  previousAgent={previousAgent}
-                  currentAgent={currentAgent}
-                  nextAgent={nextAgent}
-                />
+              <div>
                 <CostPanel
                   chapterNum={config.chapter_num}
                   mode={config.mode}
                   isOpening={config.is_opening}
                   bestOfN={config.best_of_n}
                   enabledAgents={config.enabled_agents}
-                  budgetUsd={config.budget_usd}
-                  onBudgetChange={(b) => setConfig({ ...config, budget_usd: b })}
-                  refreshKey={bookRefreshKey}
                 />
               </div>
             </div>
@@ -359,17 +410,19 @@ export default function Page() {
               )}
               {evidenceTab === "references" && (
                 <div className="min-h-[360px]">
-                  <ReferenceManager />
+                  <ReferenceManager scriptId={currentScriptId} />
                 </div>
               )}
               {evidenceTab === "ops" && (
                 <div className="grid gap-4 lg:grid-cols-2">
                   <MarketingPanel
                     chapter={currentChapter}
+                    scriptId={currentScriptId}
                     refreshKey={bookRefreshKey}
                   />
                   <FeedbackPanel
                     chapter={currentChapter}
+                    scriptId={currentScriptId}
                     refreshKey={bookRefreshKey}
                   />
                 </div>
@@ -381,9 +434,10 @@ export default function Page() {
           </div>
         ) : (
           <div className="mt-4 grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-            <BookOverview refreshKey={bookRefreshKey} />
+            <BookOverview scriptId={currentScriptId} refreshKey={bookRefreshKey} />
             <ForeshadowingLedger
               currentChapter={currentChapter}
+              scriptId={currentScriptId}
               refreshKey={bookRefreshKey}
             />
           </div>
@@ -443,7 +497,7 @@ function RunControlBanner({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-sm text-slate-200">
           {run
-            ? `当前运行：第 ${run.chapter_num} 章 · Run #${run.run_id}`
+            ? `当前运行：${run.script_name} · 第 ${run.chapter_num} 章 · Run #${run.run_id}`
             : "当前运行：未启动"}
         </div>
         <div className="font-mono text-[12px] text-cyan-200">进度 {doneCount}/9</div>
@@ -508,42 +562,6 @@ function PipelineStepList({
             )}
           </button>
         ))}
-      </div>
-    </div>
-  );
-}
-
-function ContextPanel({
-  previousAgent,
-  currentAgent,
-  nextAgent,
-}: {
-  previousAgent: AgentStatus | null;
-  currentAgent: AgentStatus | null;
-  nextAgent: AgentStatus | null;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-      <div className="mb-2 text-[10px] font-mono uppercase tracking-wider text-slate-500">
-        上下文层
-      </div>
-      <div className="space-y-3 text-[12px]">
-        <ContextBlock title="上一步产出" content={previousAgent?.output_preview || "（无）"} />
-        <ContextBlock title="当前步骤" content={currentAgent?.name || "（未开始）"} />
-        <ContextBlock title="下一步骤" content={nextAgent?.name || "（流程结束）"} />
-      </div>
-    </div>
-  );
-}
-
-function ContextBlock({ title, content }: { title: string; content: string }) {
-  return (
-    <div>
-      <div className="mb-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">
-        {title}
-      </div>
-      <div className="rounded-md border border-white/10 bg-black/30 p-2 text-slate-300 line-clamp-3">
-        {content}
       </div>
     </div>
   );

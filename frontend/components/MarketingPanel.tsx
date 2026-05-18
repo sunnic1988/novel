@@ -8,9 +8,11 @@ import type { TitleCandidate } from "@/lib/types";
 
 export function MarketingPanel({
   chapter,
+  scriptId,
   refreshKey = 0,
 }: {
   chapter: number | null;
+  scriptId: string;
   refreshKey?: number;
 }) {
   const [titles, setTitles] = useState<TitleCandidate[]>([]);
@@ -21,14 +23,14 @@ export function MarketingPanel({
   useEffect(() => {
     if (chapter) {
       api
-        .getTitles(chapter)
+        .getTitles(chapter, scriptId)
         .then((r) => setTitles(r.candidates))
         .catch(() => setTitles([]));
     } else {
       setTitles([]);
     }
-    api.getSynopsis().then((r) => setSynopsis(r.text)).catch(() => {});
-  }, [chapter, refreshKey]);
+    api.getSynopsis(scriptId).then((r) => setSynopsis(r.text)).catch(() => {});
+  }, [chapter, refreshKey, scriptId]);
 
   const handleCopy = async (i: number, text: string) => {
     try {
@@ -39,7 +41,7 @@ export function MarketingPanel({
   };
 
   const handleSaveSyn = async () => {
-    await api.saveSynopsis(synopsis);
+    await api.saveSynopsis(synopsis, scriptId);
     setSavedSyn(true);
     setTimeout(() => setSavedSyn(false), 1500);
   };

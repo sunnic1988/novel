@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
-from novel_agents.book.paths import FEEDBACK_DIR, feedback_path
+from novel_agents.book.paths import feedback_dir, feedback_path
 
 
 def save(chapter: int, text: str) -> None:
-    FEEDBACK_DIR.mkdir(parents=True, exist_ok=True)
+    feedback_dir().mkdir(parents=True, exist_ok=True)
     feedback_path(chapter).write_text(text.strip() + "\n", encoding="utf-8")
 
 
@@ -21,10 +21,11 @@ def load(chapter: int) -> str:
 
 
 def list_all() -> list[dict]:
-    if not FEEDBACK_DIR.exists():
+    fb_dir = feedback_dir()
+    if not fb_dir.exists():
         return []
     out = []
-    for f in sorted(FEEDBACK_DIR.glob("ch*-comments.md")):
+    for f in sorted(fb_dir.glob("ch*-comments.md")):
         stem = f.stem  # ch001-comments
         try:
             chnum = int(stem.split("-")[0].replace("ch", ""))

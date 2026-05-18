@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 
+from fastapi.testclient import TestClient
 from novel_agents.server.app import create_app
-from novel_agents.server.models import StartRunRequest
+from novel_agents.server.models import Event, RunSummary, StartRunRequest, now_ms
+from novel_agents.server import storage_sqlite
 from novel_agents.server.runner import manager
 
 
@@ -16,6 +19,8 @@ def test_app_boots():
     for required in [
         "/api/agents",
         "/api/status",
+        "/api/scripts",
+        "/api/scripts/{script_id}/runs",
         "/api/runs",
         "/api/runs/{run_id}",
         "/api/runs/{run_id}/artifacts",
@@ -24,6 +29,67 @@ def test_app_boots():
         "/ws",
     ]:
         assert required in paths, f"missing route: {required}"
+
+
+def test_scripts_crud_endpoints():
+    app = create_app()
+    client = TestClient(app)
+
+    resp = client.get("/api/scripts")
+    assert resp.status_code == 200
+    items = resp.json()["items"]
+    assert any(it["id"] == "default" for it in items)
+
+    suffix = uuid.uuid4().hex[:8]
+    create = client.post("/api/scripts", json={"name": f"测试剧本-{suffix}", "description": "desc"})
+    assert create.status_code == 200
+    script_id = create.json()["item"]["id"]
+
+    patch = client.patch(f"/api/scripts/{script_id}", json={"name": f"新名-{suffix}"})
+    assert patch.status_code == 200
+    assert patch.json()["item"]["name"].startswith("新名-")
+
+    runs = client.get(f"/api/scripts/{script_id}/runs")
+    assert runs.status_code == 200
+    assert isinstance(runs.json()["runs"], list)
+
+    delete = client.delete(f"/api/scripts/{script_id}")
+    assert delete.status_code == 200
+    assert delete.json()["ok"] is True
+
+
+def test_event_and_run_written_to_sqlite():
+    run_id = f"sqlite-{uuid.uuid4().hex[:8]}"
+    run = RunSummary(
+        run_id=run_id,
+        script_id="default",
+        script_name="默认剧本",
+        chapter_num=1,
+        chapter_title="sqlite",
+        mode="mock",
+        status="running",
+        created_at=now_ms(),
+        started_at=now_ms(),
+        completed_at=None,
+        auto_run=True,
+        agents=[],
+    )
+
+    from novel_agents.server.events import bus
+
+    async def go():
+        await bus.publish_run_update(run)
+        await bus.publish(
+            Event(run_id=run_id, type="agent_started", agent="planner", message="hello")
+        )
+
+    asyncio.run(go())
+
+    db_run = storage_sqlite.get_run(run_id)
+    assert db_run is not None
+    assert db_run.script_id == "default"
+    db_events = storage_sqlite.get_events(run_id)
+    assert len(db_events) >= 1
 
 
 def test_mock_run_executes_all_nine_agents():

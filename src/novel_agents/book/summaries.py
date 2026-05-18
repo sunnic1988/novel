@@ -5,11 +5,11 @@
 
 from __future__ import annotations
 
-from novel_agents.book.paths import SUMMARIES_DIR, summary_path
+from novel_agents.book.paths import summaries_dir, summary_path
 
 
 def save(chapter: int, summary_text: str) -> None:
-    SUMMARIES_DIR.mkdir(parents=True, exist_ok=True)
+    summaries_dir().mkdir(parents=True, exist_ok=True)
     summary_path(chapter).write_text(summary_text.strip() + "\n", encoding="utf-8")
 
 

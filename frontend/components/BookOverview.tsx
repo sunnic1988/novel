@@ -12,21 +12,26 @@ import {
   TrendingDown,
   TrendingUp,
   Users2,
-  Wallet,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { BookDashboard, KpiTrends } from "@/lib/types";
 import { Sparkline } from "./Sparkline";
 
-export function BookOverview({ refreshKey = 0 }: { refreshKey?: number }) {
+export function BookOverview({
+  scriptId,
+  refreshKey = 0,
+}: {
+  scriptId: string;
+  refreshKey?: number;
+}) {
   const [data, setData] = useState<BookDashboard | null>(null);
   const [trends, setTrends] = useState<KpiTrends | null>(null);
 
   useEffect(() => {
-    api.bookDashboard().then(setData).catch(() => {});
-    api.kpiTrends().then(setTrends).catch(() => {});
-  }, [refreshKey]);
+    api.bookDashboard(scriptId).then(setData).catch(() => {});
+    api.kpiTrends(scriptId).then(setTrends).catch(() => {});
+  }, [refreshKey, scriptId]);
 
   if (!data) {
     return (
@@ -54,17 +59,6 @@ export function BookOverview({ refreshKey = 0 }: { refreshKey?: number }) {
           value={data.runs.total_tokens.toLocaleString()}
           sub={`${data.runs.total} 次创作`}
           color="from-indigo-400 to-violet-500"
-        />
-        <BigStat
-          icon={<Wallet size={14} />}
-          label="累计成本 USD"
-          value={`$${data.runs.total_cost_usd.toFixed(3)}`}
-          sub={
-            data.chapters_written
-              ? `平均 $${(data.runs.total_cost_usd / Math.max(1, data.chapters_written)).toFixed(3)} / 章`
-              : "—"
-          }
-          color="from-amber-400 to-rose-500"
         />
         <BigStat
           icon={<Flame size={14} />}
@@ -150,12 +144,12 @@ export function BookOverview({ refreshKey = 0 }: { refreshKey?: number }) {
         </div>
       </div>
 
-      {/* by_agent 成本 */}
+      {/* by_agent token */}
       <div className="panel-glow p-4">
         <div className="mb-3 flex items-center gap-2">
           <Coins size={14} className="text-indigo-300" />
           <h3 className="text-sm font-semibold text-slate-100">
-            按 Agent 累计 Token / 成本
+            按 Agent 累计 Token
           </h3>
         </div>
         {data.runs.by_agent.length === 0 ? (
@@ -179,9 +173,7 @@ export function BookOverview({ refreshKey = 0 }: { refreshKey?: number }) {
                   <div className="font-mono text-xl tabular-nums text-slate-100">
                     {(a.prompt_tokens + a.completion_tokens).toLocaleString()}
                   </div>
-                  <div className="font-mono text-sm text-amber-300">
-                    ${a.cost_usd.toFixed(3)}
-                  </div>
+                  <div className="font-mono text-[11px] text-slate-500">{a.calls} 次调用</div>
                 </div>
                 <div className="mt-1 font-mono text-[10px] text-slate-500">
                   in {a.prompt_tokens.toLocaleString()} / out{" "}
@@ -195,8 +187,8 @@ export function BookOverview({ refreshKey = 0 }: { refreshKey?: number }) {
 
       {/* 金句 + 角色 runtime */}
       <div className="grid gap-4 md:grid-cols-2">
-        <HighlightsCard refreshKey={refreshKey} />
-        <CharacterRuntimeCard refreshKey={refreshKey} />
+        <HighlightsCard refreshKey={refreshKey} scriptId={scriptId} />
+        <CharacterRuntimeCard refreshKey={refreshKey} scriptId={scriptId} />
       </div>
     </div>
   );
@@ -308,11 +300,11 @@ function TrendCard({
   );
 }
 
-function HighlightsCard({ refreshKey }: { refreshKey: number }) {
+function HighlightsCard({ refreshKey, scriptId }: { refreshKey: number; scriptId: string }) {
   const [items, setItems] = useState<any[]>([]);
   useEffect(() => {
-    api.listHighlights().then((r) => setItems(r.items)).catch(() => {});
-  }, [refreshKey]);
+    api.listHighlights(scriptId).then((r) => setItems(r.items)).catch(() => {});
+  }, [refreshKey, scriptId]);
   return (
     <div className="panel-glow p-4">
       <div className="mb-3 flex items-center gap-2">
@@ -349,14 +341,14 @@ function HighlightsCard({ refreshKey }: { refreshKey: number }) {
   );
 }
 
-function CharacterRuntimeCard({ refreshKey }: { refreshKey: number }) {
+function CharacterRuntimeCard({ refreshKey, scriptId }: { refreshKey: number; scriptId: string }) {
   const [items, setItems] = useState<any[]>([]);
   useEffect(() => {
     api
-      .listCharacterRuntime()
+      .listCharacterRuntime(scriptId)
       .then((r) => setItems(r.items))
       .catch(() => {});
-  }, [refreshKey]);
+  }, [refreshKey, scriptId]);
   return (
     <div className="panel-glow p-4">
       <div className="mb-3 flex items-center gap-2">

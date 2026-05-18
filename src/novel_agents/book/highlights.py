@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from novel_agents.book.paths import HIGHLIGHTS_FILE
+from novel_agents.book.paths import highlights_file
 
 
 @dataclass
@@ -22,7 +22,7 @@ class Highlight:
 
 
 def _yaml_path() -> str:
-    return str(HIGHLIGHTS_FILE) + ".yaml"
+    return str(highlights_file()) + ".yaml"
 
 
 def load_all() -> list[Highlight]:
@@ -41,7 +41,8 @@ def load_all() -> list[Highlight]:
 
 
 def save_all(items: list[Highlight]) -> None:
-    HIGHLIGHTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fp = highlights_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
     from pathlib import Path
 
     Path(_yaml_path()).write_text(
@@ -57,7 +58,7 @@ def save_all(items: list[Highlight]) -> None:
     for h in items:
         tag = f" [{h.tag}]" if h.tag else ""
         lines.append(f"- 第{h.chapter}章{tag}：{h.text}")
-    HIGHLIGHTS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fp.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def add(chapter: int, text: str, tag: str = "", score: float = 0.0) -> Highlight:

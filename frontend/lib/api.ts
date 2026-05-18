@@ -4,10 +4,17 @@ import type {
   ReferenceItem,
   RunArtifactItem,
   RunSummary,
+  ScriptItem,
   StatusInfo,
   TitleCandidate,
   TraceEvent,
 } from "@/lib/types";
+
+function withScript(path: string, scriptId?: string): string {
+  if (!scriptId) return path;
+  const sep = path.includes("?") ? "&" : "?";
+  return `${path}${sep}script_id=${encodeURIComponent(scriptId)}`;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -20,18 +27,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `${res.status} ${res.statusText}`);
+    let detail = "";
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      detail = parsed?.detail || "";
+    } catch {
+      // ignore parse failure
+    }
+    throw new Error(detail || text || `${res.status} ${res.statusText}`);
   }
 
   return (await res.json()) as T;
 }
 
 export const api = {
-  status: () => request<StatusInfo>("/api/status"),
-  listRuns: () => request<{ runs: RunSummary[] }>("/api/runs"),
+  status: (scriptId?: string) => request<StatusInfo>(withScript("/api/status", scriptId)),
+  listRuns: (scriptId?: string) =>
+    request<{ runs: RunSummary[] }>(
+      scriptId ? `/api/runs?script_id=${encodeURIComponent(scriptId)}` : "/api/runs"
+    ),
+  listScriptRuns: (scriptId: string) =>
+    request<{ runs: RunSummary[] }>(
+      `/api/scripts/${encodeURIComponent(scriptId)}/runs`
+    ),
   getRun: (runId: string) => request<RunSummary>(`/api/runs/${runId}`),
-  getEvents: (runId: string) =>
-    request<{ events: TraceEvent[] }>(`/api/runs/${runId}/events`),
+  getEvents: (runId: string, limit = 5000, offset = 0) =>
+    request<{ events: TraceEvent[] }>(
+      `/api/runs/${runId}/events?limit=${limit}&offset=${offset}`
+    ),
   listRunArtifacts: (runId: string) =>
     request<{ items: RunArtifactItem[] }>(`/api/runs/${runId}/artifacts`),
   getRunArtifact: (runId: string, name: string) =>
@@ -42,6 +65,24 @@ export const api = {
     request<{ run_id: string; run: RunSummary }>("/api/runs", {
       method: "POST",
       body: JSON.stringify(body),
+    }),
+  listScripts: () => request<{ items: ScriptItem[] }>("/api/scripts"),
+  createScript: (body: { id?: string; name: string; description?: string }) =>
+    request<{ item: ScriptItem }>("/api/scripts", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  updateScript: (
+    scriptId: string,
+    body: { name?: string; description?: string; archived?: boolean }
+  ) =>
+    request<{ item: ScriptItem }>(`/api/scripts/${encodeURIComponent(scriptId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteScript: (scriptId: string) =>
+    request<{ ok: boolean }>(`/api/scripts/${encodeURIComponent(scriptId)}`, {
+      method: "DELETE",
     }),
   pauseRun: (runId: string) =>
     request<{ ok: boolean; status: string }>(`/api/runs/${runId}/pause`, {
@@ -69,69 +110,85 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  listReferences: () => request<{ items: ReferenceItem[] }>("/api/references"),
-  uploadReference: (file: File) => {
+  listReferences: (scriptId?: string) =>
+    request<{ items: ReferenceItem[] }>(withScript("/api/references", scriptId)),
+  uploadReference: (file: File, scriptId?: string) => {
     const form = new FormData();
     form.append("file", file);
     return request<{ ok: boolean; name: string; size: number }>(
-      "/api/references/upload",
+      withScript("/api/references/upload", scriptId),
       { method: "POST", body: form }
     );
   },
-  deleteReference: (name: string) =>
-    request<{ ok: boolean }>(`/api/references/${encodeURIComponent(name)}`, {
+  deleteReference: (name: string, scriptId?: string) =>
+    request<{ ok: boolean }>(
+      withScript(`/api/references/${encodeURIComponent(name)}`, scriptId),
+      {
       method: "DELETE",
-    }),
-  ingestReferences: () =>
+      }
+    ),
+  ingestReferences: (scriptId?: string) =>
     request<{ ok: boolean; added_chunks: number; total_chunks: number }>(
-      "/api/references/ingest",
+      withScript("/api/references/ingest", scriptId),
       { method: "POST" }
     ),
-  searchReferences: (q: string, n = 5) =>
+  searchReferences: (q: string, n = 5, scriptId?: string) =>
     request<{ results: string[] }>(
-      `/api/references/search?q=${encodeURIComponent(q)}&n=${n}`
+      withScript(`/api/references/search?q=${encodeURIComponent(q)}&n=${n}`, scriptId)
     ),
 
-  bookDashboard: () => request<any>("/api/book/dashboard"),
-  kpiTrends: () => request<any>("/api/book/kpi/trends"),
+  bookDashboard: (scriptId?: string) =>
+    request<any>(withScript("/api/book/dashboard", scriptId)),
+  kpiTrends: (scriptId?: string) =>
+    request<any>(withScript("/api/book/kpi/trends", scriptId)),
   costAlerts: (budget_usd: number | null) =>
     request<any>("/api/book/cost-alerts", {
       method: "POST",
       body: JSON.stringify({ budget_usd }),
     }),
-  listHighlights: () => request<any>("/api/highlights"),
-  listCharacterRuntime: () => request<any>("/api/characters/runtime"),
+  listHighlights: (scriptId?: string) =>
+    request<any>(withScript("/api/highlights", scriptId)),
+  listCharacterRuntime: (scriptId?: string) =>
+    request<any>(withScript("/api/characters/runtime", scriptId)),
 
-  listForeshadowing: (currentChapter?: number) =>
+  listForeshadowing: (currentChapter?: number, scriptId?: string) =>
     request<{ items: ForeshadowingItem[]; stats: Record<string, number> }>(
-      `/api/foreshadowing${
-        currentChapter ? `?current_chapter=${currentChapter}` : ""
-      }`
+      withScript(
+        `/api/foreshadowing${currentChapter ? `?current_chapter=${currentChapter}` : ""}`,
+        scriptId
+      )
     ),
-  upsertForeshadowing: (item: ForeshadowingItem) =>
-    request<Record<string, unknown>>("/api/foreshadowing", {
+  upsertForeshadowing: (item: ForeshadowingItem, scriptId?: string) =>
+    request<Record<string, unknown>>(withScript("/api/foreshadowing", scriptId), {
       method: "POST",
       body: JSON.stringify(item),
     }),
-  deleteForeshadowing: (id: string) =>
-    request<{ ok: boolean }>(`/api/foreshadowing/${encodeURIComponent(id)}`, {
+  deleteForeshadowing: (id: string, scriptId?: string) =>
+    request<{ ok: boolean }>(
+      withScript(`/api/foreshadowing/${encodeURIComponent(id)}`, scriptId),
+      {
       method: "DELETE",
-    }),
+      }
+    ),
 
-  listFeedback: () => request<{ items: Array<{ chapter: number; text: string }> }>("/api/feedback"),
-  saveFeedback: (chapter: number, text: string) =>
-    request<{ ok: boolean; chapter: number }>("/api/feedback", {
+  listFeedback: (scriptId?: string) =>
+    request<{ items: Array<{ chapter: number; text: string }> }>(
+      withScript("/api/feedback", scriptId)
+    ),
+  saveFeedback: (chapter: number, text: string, scriptId?: string) =>
+    request<{ ok: boolean; chapter: number }>(withScript("/api/feedback", scriptId), {
       method: "POST",
       body: JSON.stringify({ chapter, text }),
     }),
 
-  getTitles: (chapter: number) =>
+  getTitles: (chapter: number, scriptId?: string) =>
     request<{ chapter: number; candidates: TitleCandidate[] }>(
-      `/api/marketing/titles/${chapter}`
+      withScript(`/api/marketing/titles/${chapter}`, scriptId)
     ),
-  getSynopsis: () => request<{ text: string }>("/api/marketing/synopsis"),
-  saveSynopsis: (text: string) =>
-    request<{ ok: boolean; chars: number }>("/api/marketing/synopsis", {
+  getSynopsis: (scriptId?: string) =>
+    request<{ text: string }>(withScript("/api/marketing/synopsis", scriptId)),
+  saveSynopsis: (text: string, scriptId?: string) =>
+    request<{ ok: boolean; chars: number }>(withScript("/api/marketing/synopsis", scriptId), {
       method: "POST",
       body: JSON.stringify({ text }),
     }),

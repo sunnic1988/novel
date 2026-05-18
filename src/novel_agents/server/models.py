@@ -139,6 +139,8 @@ class AgentStatus(BaseModel):
 
 class RunSummary(BaseModel):
     run_id: str
+    script_id: str = "default"
+    script_name: str = "默认剧本"
     chapter_num: int
     chapter_title: str
     mode: Literal["live", "mock"] = "mock"
@@ -168,6 +170,7 @@ class Event(BaseModel):
 
 
 class StartRunRequest(BaseModel):
+    script_id: str = "default"
     chapter_num: int = 1
     chapter_title: str = ""
     auto_run: bool = True

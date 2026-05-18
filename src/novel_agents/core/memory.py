@@ -7,10 +7,10 @@ from pathlib import Path
 import chromadb
 from chromadb.config import Settings
 
+from novel_agents.book.paths import get_active_script, references_dir
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CHROMA_DIR = PROJECT_ROOT / ".chroma_db"
-REFERENCES_DIR = PROJECT_ROOT / "references"
-CHAPTERS_DIR = PROJECT_ROOT / "chapters"
 
 
 def _get_client() -> chromadb.ClientAPI:
@@ -26,8 +26,10 @@ def _get_client() -> chromadb.ClientAPI:
 def get_reference_collection() -> chromadb.Collection:
     """爆款范文参考集合"""
     client = _get_client()
+    sid = get_active_script()
+    name = f"reference_texts__{sid}"
     return client.get_or_create_collection(
-        name="reference_texts",
+        name=name,
         metadata={"description": "修仙小说爆款范文片段"},
     )
 
@@ -35,8 +37,10 @@ def get_reference_collection() -> chromadb.Collection:
 def get_chapters_collection() -> chromadb.Collection:
     """已写章节集合 — 用于上下文连贯性检索"""
     client = _get_client()
+    sid = get_active_script()
+    name = f"written_chapters__{sid}"
     return client.get_or_create_collection(
-        name="written_chapters",
+        name=name,
         metadata={"description": "已完成的章节内容"},
     )
 
@@ -44,7 +48,7 @@ def get_chapters_collection() -> chromadb.Collection:
 def ingest_reference_texts() -> int:
     """将 references/ 目录下的 .md/.txt 文件切分并向量化入库"""
     collection = get_reference_collection()
-    ref_dir = REFERENCES_DIR
+    ref_dir = references_dir()
     if not ref_dir.exists():
         return 0
 

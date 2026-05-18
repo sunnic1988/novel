@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from novel_agents.book.paths import REVIEWS_DIR, kpi_path
+from novel_agents.book.paths import kpi_path, reviews_dir
 
 
 @dataclass
@@ -43,7 +43,7 @@ class ChapterKPI:
 
 
 def save(kpi: ChapterKPI) -> Path:
-    REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
+    reviews_dir().mkdir(parents=True, exist_ok=True)
     p = kpi_path(kpi.chapter)
     p.write_text(json.dumps(kpi.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     return p
@@ -61,10 +61,11 @@ def load(chapter: int) -> ChapterKPI | None:
 
 
 def list_all() -> list[ChapterKPI]:
-    if not REVIEWS_DIR.exists():
+    rv_dir = reviews_dir()
+    if not rv_dir.exists():
         return []
     out: list[ChapterKPI] = []
-    for f in sorted(REVIEWS_DIR.glob("ch*-kpi.json")):
+    for f in sorted(rv_dir.glob("ch*-kpi.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
             out.append(ChapterKPI(**data))

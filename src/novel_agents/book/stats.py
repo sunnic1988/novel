@@ -17,7 +17,7 @@ from typing import Any
 
 from novel_agents.book import character_runtime, foreshadowing, highlights, kpi
 from novel_agents.book.cost import estimate_cost, price_for_model
-from novel_agents.book.paths import CHAPTERS_DIR, TRACES_DIR
+from novel_agents.book.paths import chapters_dir, traces_dir
 
 
 def _count_chinese(text: str) -> int:
@@ -26,9 +26,10 @@ def _count_chinese(text: str) -> int:
 
 def chapters_overview() -> list[dict[str, Any]]:
     out = []
-    if not CHAPTERS_DIR.exists():
+    ch_dir = chapters_dir()
+    if not ch_dir.exists():
         return out
-    for f in sorted(CHAPTERS_DIR.glob("ch*.md")):
+    for f in sorted(ch_dir.glob("ch*.md")):
         try:
             n = int(f.stem.replace("ch", ""))
         except ValueError:
@@ -39,7 +40,7 @@ def chapters_overview() -> list[dict[str, Any]]:
                 "chapter": n,
                 "title": _extract_title(text),
                 "word_count": _count_chinese(text),
-                "file": str(f.relative_to(CHAPTERS_DIR.parent)),
+                "file": str(f.relative_to(ch_dir.parent)),
             }
         )
     return out
@@ -63,7 +64,8 @@ def runs_aggregate() -> dict[str, Any]:
     by_run: list[dict[str, Any]] = []
     by_agent: dict[str, dict[str, Any]] = {}
 
-    if not TRACES_DIR.exists():
+    tr_dir = traces_dir()
+    if not tr_dir.exists():
         return {
             "total_runs": 0,
             "total_tokens": 0,
@@ -74,7 +76,7 @@ def runs_aggregate() -> dict[str, Any]:
             "by_agent": {},
         }
 
-    for trace_file in sorted(TRACES_DIR.glob("*.jsonl")):
+    for trace_file in sorted(tr_dir.glob("*.jsonl")):
         run_id = trace_file.stem
         run_in = 0
         run_out = 0

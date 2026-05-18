@@ -14,7 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { ReferenceItem } from "@/lib/types";
 
-export function ReferenceManager() {
+export function ReferenceManager({ scriptId }: { scriptId: string }) {
   const [items, setItems] = useState<ReferenceItem[]>([]);
   const [chunkCount, setChunkCount] = useState<number>(0);
   const [busy, setBusy] = useState(false);
@@ -26,10 +26,13 @@ export function ReferenceManager() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
-    const [list, status] = await Promise.all([api.listReferences(), api.status()]);
+    const [list, status] = await Promise.all([
+      api.listReferences(scriptId),
+      api.status(scriptId),
+    ]);
     setItems(list.items);
     setChunkCount(status.reference_chunks);
-  }, []);
+  }, [scriptId]);
 
   useEffect(() => {
     refresh().catch(() => {});
@@ -42,7 +45,7 @@ export function ReferenceManager() {
       try {
         const arr = Array.from(files);
         for (const f of arr) {
-          await api.uploadReference(f);
+          await api.uploadReference(f, scriptId);
         }
         setMsg(`已上传 ${arr.length} 个文件`);
         await refresh();
@@ -59,7 +62,7 @@ export function ReferenceManager() {
     setBusy(true);
     setMsg("");
     try {
-      const r = await api.ingestReferences();
+      const r = await api.ingestReferences(scriptId);
       setMsg(`✓ 新增 ${r.added_chunks} 个向量片段，库内共 ${r.total_chunks} 条`);
       setChunkCount(r.total_chunks);
     } catch (e: any) {
@@ -73,7 +76,7 @@ export function ReferenceManager() {
     if (!confirm(`删除范文 ${name} ?`)) return;
     setBusy(true);
     try {
-      await api.deleteReference(name);
+      await api.deleteReference(name, scriptId);
       await refresh();
     } finally {
       setBusy(false);
@@ -84,7 +87,7 @@ export function ReferenceManager() {
     if (!query.trim()) return;
     setSearching(true);
     try {
-      const r = await api.searchReferences(query, 5);
+      const r = await api.searchReferences(query, 5, scriptId);
       setResults(r.results);
     } finally {
       setSearching(false);

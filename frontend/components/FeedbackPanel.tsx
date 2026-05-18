@@ -6,9 +6,11 @@ import { api } from "@/lib/api";
 
 export function FeedbackPanel({
   chapter,
+  scriptId,
   refreshKey = 0,
 }: {
   chapter: number | null;
+  scriptId: string;
   refreshKey?: number;
 }) {
   const [text, setText] = useState("");
@@ -19,7 +21,7 @@ export function FeedbackPanel({
 
   useEffect(() => {
     api
-      .listFeedback()
+      .listFeedback(scriptId)
       .then((r) => {
         setFeedbacks(r.items);
         if (chapter) {
@@ -28,11 +30,11 @@ export function FeedbackPanel({
         }
       })
       .catch(() => {});
-  }, [chapter, refreshKey]);
+  }, [chapter, refreshKey, scriptId]);
 
   const handleSave = async () => {
     if (!chapter) return;
-    await api.saveFeedback(chapter, text);
+    await api.saveFeedback(chapter, text, scriptId);
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };

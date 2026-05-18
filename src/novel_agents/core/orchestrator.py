@@ -17,6 +17,13 @@ from novel_agents.agents import (
     create_world_builder,
     create_writer,
 )
+from novel_agents.book.paths import (
+    bible_dir,
+    chapter_path,
+    plans_dir,
+    reviews_dir,
+    use_script,
+)
 from novel_agents.core.llm_gateway import LLM_ASSIGNMENT
 from novel_agents.core.memory import ingest_chapter, ingest_reference_texts
 
@@ -31,12 +38,12 @@ def _read_file_safe(path: Path) -> str:
 
 
 def _load_synopsis() -> str:
-    return _read_file_safe(PROJECT_ROOT / "plans" / "synopsis.md")
+    return _read_file_safe(plans_dir() / "synopsis.md")
 
 
 def _load_bible_summary() -> str:
     parts = []
-    bible = PROJECT_ROOT / "bible"
+    bible = bible_dir()
     for md in sorted(bible.rglob("*.md")):
         parts.append(f"### {md.relative_to(bible)}\n{md.read_text(encoding='utf-8')[:2000]}")
     return "\n\n".join(parts) if parts else "（故事圣经为空）"
@@ -50,13 +57,12 @@ def _load_previous_chapters(up_to: int, count: int = 3) -> str:
     - 全书伏笔账本（账本式条目）
     - 全书近 5 条读者反馈摘要
     """
-    chapters_dir = PROJECT_ROOT / "chapters"
     parts: list[str] = []
 
     # 最近 count 章原文
     recent = []
     for i in range(max(1, up_to - count), up_to):
-        ch_file = chapters_dir / f"ch{i:03d}.md"
+        ch_file = chapter_path(i)
         if ch_file.exists():
             content = ch_file.read_text(encoding="utf-8")
             recent.append(f"### 第{i}章原文（截尾 3000 字）\n{content[-3000:]}")
@@ -117,7 +123,7 @@ OPENING_GUIDANCE = """
 
 
 def _load_chapter_plan(chapter_num: int) -> str:
-    plan_file = PROJECT_ROOT / "plans" / f"ch{chapter_num:03d}-plan.md"
+    plan_file = plans_dir() / f"ch{chapter_num:03d}-plan.md"
     return _read_file_safe(plan_file)
 
 
@@ -137,8 +143,20 @@ def _build_agent_prompt(
         "arc_architect": "你是卷纲架构师，输出本章在全书中的卷级定位、冲突主线、伏笔安排。",
         "planner": "你是策划师，输出本章场景beats与节奏推进。",
         "pacing_doctor": "你是节奏医生，检查上一步节奏并给出可执行修正方案。",
-        "world_builder": "你是世界观师，检查设定一致性并补齐设定约束。",
-        "writer": "你是写手，基于前序输出写出本章正文草稿。",
+        "world_builder": (
+            "你是世界观师，只能输出设定审查报告，不得写成章节正文。"
+            "强制输出结构：\n"
+            "1) 结论: PASS 或 FAIL\n"
+            "2) 设定问题列表（至少3条，包含冲突点与影响）\n"
+            "3) 设定补丁清单（可直接回写故事圣经）\n"
+            "4) 时间线/战力约束\n"
+            "禁止输出大量对白、场景描写、叙事段落。"
+        ),
+        "writer": (
+            "你是写手，只输出章节正文，不得输出审查报告。"
+            "禁止出现“PASS/FAIL/设定问题列表/结论/补丁清单”等词。"
+            "必须有场景推进和人物对话，默认目标字数 2000-3000 字。"
+        ),
         "reviewer": "你是审校师，给出结构化审校意见和改写建议。",
         "polisher": "你是润色师，输出去AI味后的润色正文。",
         "reader_sim": "你是读者模拟，输出读者视角反馈、追更欲和风险点。",
@@ -154,6 +172,23 @@ def _build_agent_prompt(
     )
 
 
+def _validate_agent_output(agent_id: str, response: str) -> tuple[str, str]:
+    warning = ""
+    text = response.strip()
+    if agent_id == "world_builder":
+        up = text.upper()
+        has_pass_fail = "PASS" in up or "FAIL" in up
+        has_report_markers = "设定问题" in text or "补丁" in text or "结论" in text
+        if not (has_pass_fail and has_report_markers):
+            warning = "world_builder 输出缺少 PASS/FAIL 或结构化审查段落"
+    elif agent_id == "writer":
+        if any(x in text for x in ("PASS", "FAIL", "设定问题", "补丁清单", "审查结论")):
+            warning = "writer 输出疑似混入审查报告格式"
+        elif len(text) < 800:
+            warning = "writer 输出字数偏短，可能未生成完整正文"
+    return text, warning
+
+
 def run_single_agent_step(
     agent_id: str,
     chapter_num: int,
@@ -162,25 +197,28 @@ def run_single_agent_step(
     previous_outputs: dict[str, str] | None = None,
     is_opening: bool = False,
     stream_callback: Any | None = None,
+    script_id: str = "default",
 ) -> dict[str, str | int]:
     """运行单个 Agent 步骤并返回可追踪结果。"""
-    synopsis = synopsis_override or _load_synopsis()
-    prev = previous_outputs or {}
-    prompt = _build_agent_prompt(
-        agent_id=agent_id,
-        chapter_num=chapter_num,
-        chapter_title=chapter_title,
-        synopsis=synopsis,
-        previous_outputs=prev,
-        is_opening=is_opening,
-    )
-    llm = LLM_ASSIGNMENT[agent_id]()
-    started = time.perf_counter()
-    response = llm.call(
-        messages=[{"role": "user", "content": prompt}],
-        stream_callback=stream_callback,
-    )
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    with use_script(script_id):
+        synopsis = synopsis_override or _load_synopsis()
+        prev = previous_outputs or {}
+        prompt = _build_agent_prompt(
+            agent_id=agent_id,
+            chapter_num=chapter_num,
+            chapter_title=chapter_title,
+            synopsis=synopsis,
+            previous_outputs=prev,
+            is_opening=is_opening,
+        )
+        llm = LLM_ASSIGNMENT[agent_id]()
+        started = time.perf_counter()
+        response = llm.call(
+            messages=[{"role": "user", "content": prompt}],
+            stream_callback=stream_callback,
+        )
+        response, validation_warning = _validate_agent_output(agent_id, response)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     # 粗略 token 估算：中文/英文混排场景下使用字符长度近似。
     prompt_tokens = max(1, len(prompt) // 4)
@@ -188,6 +226,8 @@ def run_single_agent_step(
     return {
         "prompt_full": prompt,
         "response_full": response,
+        "output_kind": "world_review" if agent_id == "world_builder" else ("chapter_text" if agent_id == "writer" else "general"),
+        "validation_warning": validation_warning,
         "model": llm.model,
         "latency_ms": elapsed_ms,
         "prompt_tokens": prompt_tokens,
@@ -201,211 +241,191 @@ def run_chapter_pipeline(
     max_review_rounds: int = 3,
     synopsis_override: str = "",
     is_opening: bool | None = None,
+    script_id: str = "default",
 ) -> str:
     """执行单章创作流水线"""
 
-    msg = f"[bold cyan]开始创作第 {chapter_num} 章: {chapter_title}[/]"
-    console.print(Panel(msg, expand=False))
+    with use_script(script_id):
+        msg = f"[bold cyan]开始创作第 {chapter_num} 章: {chapter_title}[/]"
+        console.print(Panel(msg, expand=False))
 
-    # 准备上下文
-    ref_count = ingest_reference_texts()
-    if ref_count > 0:
-        console.print(f"[green]已导入 {ref_count} 个新的范文片段到向量库[/]")
+        ref_count = ingest_reference_texts()
+        if ref_count > 0:
+            console.print(f"[green]已导入 {ref_count} 个新的范文片段到向量库[/]")
 
-    synopsis = synopsis_override or _load_synopsis()
-    bible_summary = _load_bible_summary()
-    prev_chapters = _load_previous_chapters(chapter_num)
-    existing_plan = _load_chapter_plan(chapter_num)
+        synopsis = synopsis_override or _load_synopsis()
+        bible_summary = _load_bible_summary()
+        prev_chapters = _load_previous_chapters(chapter_num)
+        existing_plan = _load_chapter_plan(chapter_num)
 
-    # 创建所有Agent
-    planner = create_planner()
-    world_builder = create_world_builder()
-    writer = create_writer()
-    reviewer = create_reviewer()
-    polisher = create_polisher()
-    reader_sim = create_reader_sim()
+        planner = create_planner()
+        world_builder = create_world_builder()
+        writer = create_writer()
+        reviewer = create_reviewer()
+        polisher = create_polisher()
+        reader_sim = create_reader_sim()
 
-    # 开篇 3 章特化（自动检测或显式标记）
-    if is_opening is None:
-        is_opening = chapter_num <= 3
-    opening_section = OPENING_GUIDANCE if is_opening else ""
+        if is_opening is None:
+            is_opening = chapter_num <= 3
+        opening_section = OPENING_GUIDANCE if is_opening else ""
 
-    shared_context = (
-        f"## 故事总纲\n{synopsis}\n\n"
-        f"## 世界观设定摘要\n{bible_summary}\n\n"
-        f"## 前文回顾（最近章节）\n{prev_chapters}\n\n"
-        f"{opening_section}\n"
-        f"## 当前章节：第{chapter_num}章 {chapter_title}"
-    )
+        shared_context = (
+            f"## 故事总纲\n{synopsis}\n\n"
+            f"## 世界观设定摘要\n{bible_summary}\n\n"
+            f"## 前文回顾（最近章节）\n{prev_chapters}\n\n"
+            f"{opening_section}\n"
+            f"## 当前章节：第{chapter_num}章 {chapter_title}"
+        )
 
-    # ── 阶段1: 策划 ──
-    console.print("\n[bold yellow]▶ 阶段1：策划师制定场景规划[/]")
-
-    plan_description = (
-        f"请为第{chapter_num}章制定详细的场景规划（beats）。\n\n"
-        f"{shared_context}\n\n"
-    )
-    if existing_plan:
-        plan_description += f"## 已有规划草案（可参考或修改）\n{existing_plan}\n\n"
-
-    plan_description += (
-        "请输出以下内容：\n"
-        "1. 本章核心事件（一句话）\n"
-        "2. 情绪曲线设计（低→高→低→更高 等）\n"
-        "3. 具体场景beats（按顺序列出每个场景的：地点、人物、事件、情绪、目的）\n"
-        "4. 章末钩子设计\n"
-        "5. 与前文的衔接点\n"
-        "6. 本章字数目标（2000-3000字）"
-    )
-
-    plan_task = Task(
-        description=plan_description,
-        expected_output="包含场景beats、情绪曲线、钩子设计的完整章节规划",
-        agent=planner,
-    )
-
-    # ── 阶段2: 世界观检查 ──
-    console.print("[bold yellow]▶ 阶段2：世界观师检查设定一致性[/]")
-
-    worldbuild_task = Task(
-        description=(
-            f"审查策划师的章节规划，确保所有设定与故事圣经一致。\n\n"
+        console.print("\n[bold yellow]▶ 阶段1：策划师制定场景规划[/]")
+        plan_description = (
+            f"请为第{chapter_num}章制定详细的场景规划（beats）。\n\n"
             f"{shared_context}\n\n"
-            "请检查：\n"
-            "1. 人物修为、性格是否与人物卡一致\n"
-            "2. 法宝、术法是否符合力量体系设定\n"
-            "3. 地理位置、门派关系是否准确\n"
-            "4. 时间线是否合理\n"
-            "5. 如有新增设定，是否与已有体系兼容\n\n"
-            "输出：设定审查通过/不通过 + 需要修正的点 + 本章涉及的设定清单"
-        ),
-        expected_output="设定一致性审查报告，包含通过/不通过结论和修正建议",
-        agent=world_builder,
-        context=[plan_task],
-    )
+        )
+        if existing_plan:
+            plan_description += f"## 已有规划草案（可参考或修改）\n{existing_plan}\n\n"
+        plan_description += (
+            "请输出以下内容：\n"
+            "1. 本章核心事件（一句话）\n"
+            "2. 情绪曲线设计（低→高→低→更高 等）\n"
+            "3. 具体场景beats（按顺序列出每个场景的：地点、人物、事件、情绪、目的）\n"
+            "4. 章末钩子设计\n"
+            "5. 与前文的衔接点\n"
+            "6. 本章字数目标（2000-3000字）"
+        )
+        plan_task = Task(
+            description=plan_description,
+            expected_output="包含场景beats、情绪曲线、钩子设计的完整章节规划",
+            agent=planner,
+        )
 
-    # ── 阶段3: 写作 ──
-    console.print("[bold yellow]▶ 阶段3：写手撰写章节正文[/]")
+        console.print("[bold yellow]▶ 阶段2：世界观师检查设定一致性[/]")
+        worldbuild_task = Task(
+            description=(
+                f"审查策划师的章节规划，确保所有设定与故事圣经一致。\n\n"
+                f"{shared_context}\n\n"
+                "请检查：\n"
+                "1. 人物修为、性格是否与人物卡一致\n"
+                "2. 法宝、术法是否符合力量体系设定\n"
+                "3. 地理位置、门派关系是否准确\n"
+                "4. 时间线是否合理\n"
+                "5. 如有新增设定，是否与已有体系兼容\n\n"
+                "输出：设定审查通过/不通过 + 需要修正的点 + 本章涉及的设定清单"
+            ),
+            expected_output="设定一致性审查报告，包含通过/不通过结论和修正建议",
+            agent=world_builder,
+            context=[plan_task],
+        )
 
-    write_task = Task(
-        description=(
-            f"根据策划师的场景规划和世界观师的审查意见，撰写第{chapter_num}章正文。\n\n"
-            f"{shared_context}\n\n"
-            "写作要求：\n"
-            "1. 严格按照场景规划的beats顺序展开\n"
-            "2. 遵循文风指南，杜绝AI八股词\n"
-            "3. 对话要有角色辨识度\n"
-            "4. 战斗场面要有策略感和视觉冲击\n"
-            "5. 修炼/突破场面要有仪式感\n"
-            "6. 章末必须有强力钩子\n"
-            "7. 字数控制在2000-3000字\n"
-            "8. 用中文写作，输出纯正文（不要元描述）\n\n"
-            "重要：你已经通过上下文获得了所有需要的信息。"
-            "请直接开始写作，不需要再查阅任何资料。"
-            "你的输出必须是纯章节正文内容，不要包含任何思考过程或工具调用。"
-        ),
-        expected_output="2000-3000字的章节正文，中文，纯故事内容，不含任何元描述或工具调用格式",
-        agent=writer,
-        context=[plan_task, worldbuild_task],
-    )
+        console.print("[bold yellow]▶ 阶段3：写手撰写章节正文[/]")
+        write_task = Task(
+            description=(
+                f"根据策划师的场景规划和世界观师的审查意见，撰写第{chapter_num}章正文。\n\n"
+                f"{shared_context}\n\n"
+                "写作要求：\n"
+                "1. 严格按照场景规划的beats顺序展开\n"
+                "2. 遵循文风指南，杜绝AI八股词\n"
+                "3. 对话要有角色辨识度\n"
+                "4. 战斗场面要有策略感和视觉冲击\n"
+                "5. 修炼/突破场面要有仪式感\n"
+                "6. 章末必须有强力钩子\n"
+                "7. 字数控制在2000-3000字\n"
+                "8. 用中文写作，输出纯正文（不要元描述）\n\n"
+                "重要：你已经通过上下文获得了所有需要的信息。"
+                "请直接开始写作，不需要再查阅任何资料。"
+                "你的输出必须是纯章节正文内容，不要包含任何思考过程或工具调用。"
+            ),
+            expected_output="2000-3000字的章节正文，中文，纯故事内容，不含任何元描述或工具调用格式",
+            agent=writer,
+            context=[plan_task, worldbuild_task],
+        )
 
-    # ── 阶段4: 审校 ──
-    console.print("[bold yellow]▶ 阶段4：审校师十维度审查[/]")
+        console.print("[bold yellow]▶ 阶段4：审校师十维度审查[/]")
+        review_task = Task(
+            description=(
+                f"对写手产出的第{chapter_num}章进行严格审查。\n\n"
+                f"{shared_context}\n\n"
+                "请从以下十个维度评分（每项1-5分，满分50）：\n"
+                "1. 叙事逻辑（情节是否连贯自洽）\n"
+                "2. 人物一致性（言行是否符合人设）\n"
+                "3. 设定连贯性（与世界观是否矛盾）\n"
+                "4. 场景规划执行度（是否按beats展开）\n"
+                "5. 节奏与张力（爽点是否到位）\n"
+                "6. 对话质量（是否有辨识度和推动力）\n"
+                "7. 描写质量（是否有画面感和沉浸感）\n"
+                "8. 去AI味程度（是否存在AI八股特征）\n"
+                "9. 钩子与悬念（章末是否让人想追更）\n"
+                "10. 字数与信息密度（是否注水或过于压缩）\n\n"
+                "输出格式：\n"
+                "- 总分：XX/50\n"
+                "- 各维度评分和点评\n"
+                "- 具体修改建议（引用原文指出问题）\n"
+                "- 结论：通过 / 需修改 / 需重写"
+            ),
+            expected_output="包含十维度评分、具体修改建议和结论的审查报告",
+            agent=reviewer,
+            context=[write_task, plan_task],
+        )
 
-    review_task = Task(
-        description=(
-            f"对写手产出的第{chapter_num}章进行严格审查。\n\n"
-            f"{shared_context}\n\n"
-            "请从以下十个维度评分（每项1-5分，满分50）：\n"
-            "1. 叙事逻辑（情节是否连贯自洽）\n"
-            "2. 人物一致性（言行是否符合人设）\n"
-            "3. 设定连贯性（与世界观是否矛盾）\n"
-            "4. 场景规划执行度（是否按beats展开）\n"
-            "5. 节奏与张力（爽点是否到位）\n"
-            "6. 对话质量（是否有辨识度和推动力）\n"
-            "7. 描写质量（是否有画面感和沉浸感）\n"
-            "8. 去AI味程度（是否存在AI八股特征）\n"
-            "9. 钩子与悬念（章末是否让人想追更）\n"
-            "10. 字数与信息密度（是否注水或过于压缩）\n\n"
-            "输出格式：\n"
-            "- 总分：XX/50\n"
-            "- 各维度评分和点评\n"
-            "- 具体修改建议（引用原文指出问题）\n"
-            "- 结论：通过 / 需修改 / 需重写"
-        ),
-        expected_output="包含十维度评分、具体修改建议和结论的审查报告",
-        agent=reviewer,
-        context=[write_task, plan_task],
-    )
+        console.print("[bold yellow]▶ 阶段5：润色师语言精修[/]")
+        polish_task = Task(
+            description=(
+                f"对第{chapter_num}章进行语言级精修。基于审校师的意见，对章节正文进行润色。\n\n"
+                "润色重点：\n"
+                "1. 消除所有AI味词汇和句式（参考文风指南禁止列表）\n"
+                "2. 优化句子节奏：紧张处用短句，铺垫处适当延展\n"
+                "3. 打磨金句：每章至少有1-2句让人印象深刻的句子\n"
+                "4. 对话精修：确保每个角色的说话方式独特\n"
+                "5. 段落重组：避免超长段落，关键时刻单独成段\n"
+                "6. 修正审校师指出的具体问题\n\n"
+                "输出：润色后的完整章节正文（不要输出修改说明，只输出最终正文）"
+            ),
+            expected_output="润色后的完整章节正文，纯中文，去除所有AI痕迹",
+            agent=polisher,
+            context=[write_task, review_task],
+        )
 
-    # ── 阶段5: 润色 ──
-    console.print("[bold yellow]▶ 阶段5：润色师语言精修[/]")
+        console.print("[bold yellow]▶ 阶段6：读者模拟反馈[/]")
+        reader_task = Task(
+            description=(
+                f"站在修仙网文核心读者的视角，对润色后的第{chapter_num}章给出体感报告。\n\n"
+                "请回答：\n"
+                "1. 【爽感评估】哪里让你兴奋？哪里觉得无聊？（用读者的口吻）\n"
+                "2. 【代入感评估】能否代入主角视角？有没有出戏的地方？\n"
+                "3. 【追更欲评估】看完这章想不想点下一章？为什么？\n"
+                "4. 【弃书风险】有没有可能看到某段就直接弃了？\n"
+                "5. 【金句/名场面】有没有值得截图分享到读者群的段落？\n"
+                "6. 【总体评价】如果满分5星，给几星？一句话评价\n"
+                "7. 【改进建议】如果只能改一个地方，改哪里？"
+            ),
+            expected_output="读者体感报告，包含爽感、代入感、追更欲评估和改进建议",
+            agent=reader_sim,
+            context=[polish_task],
+        )
 
-    polish_task = Task(
-        description=(
-            f"对第{chapter_num}章进行语言级精修。基于审校师的意见，对章节正文进行润色。\n\n"
-            "润色重点：\n"
-            "1. 消除所有AI味词汇和句式（参考文风指南禁止列表）\n"
-            "2. 优化句子节奏：紧张处用短句，铺垫处适当延展\n"
-            "3. 打磨金句：每章至少有1-2句让人印象深刻的句子\n"
-            "4. 对话精修：确保每个角色的说话方式独特\n"
-            "5. 段落重组：避免超长段落，关键时刻单独成段\n"
-            "6. 修正审校师指出的具体问题\n\n"
-            "输出：润色后的完整章节正文（不要输出修改说明，只输出最终正文）"
-        ),
-        expected_output="润色后的完整章节正文，纯中文，去除所有AI痕迹",
-        agent=polisher,
-        context=[write_task, review_task],
-    )
-
-    # ── 阶段6: 读者模拟 ──
-    console.print("[bold yellow]▶ 阶段6：读者模拟反馈[/]")
-
-    reader_task = Task(
-        description=(
-            f"站在修仙网文核心读者的视角，对润色后的第{chapter_num}章给出体感报告。\n\n"
-            "请回答：\n"
-            "1. 【爽感评估】哪里让你兴奋？哪里觉得无聊？（用读者的口吻）\n"
-            "2. 【代入感评估】能否代入主角视角？有没有出戏的地方？\n"
-            "3. 【追更欲评估】看完这章想不想点下一章？为什么？\n"
-            "4. 【弃书风险】有没有可能看到某段就直接弃了？\n"
-            "5. 【金句/名场面】有没有值得截图分享到读者群的段落？\n"
-            "6. 【总体评价】如果满分5星，给几星？一句话评价\n"
-            "7. 【改进建议】如果只能改一个地方，改哪里？"
-        ),
-        expected_output="读者体感报告，包含爽感、代入感、追更欲评估和改进建议",
-        agent=reader_sim,
-        context=[polish_task],
-    )
-
-    # 组装Crew并执行
-    crew = Crew(
-        agents=[planner, world_builder, writer, reviewer, polisher, reader_sim],
-        tasks=[plan_task, worldbuild_task, write_task, review_task, polish_task, reader_task],
-        process=Process.sequential,
-        verbose=True,
-        max_rpm=30,
-    )
-
-    console.print("\n[bold green]🚀 开始执行创作流水线...[/]\n")
-    result = crew.kickoff()
-
-    # 保存产出物
-    _save_outputs(chapter_num, chapter_title, crew, result)
-
-    console.print(Panel(f"[bold green]✅ 第 {chapter_num} 章创作完成！[/]", expand=False))
-    return str(result)
+        crew = Crew(
+            agents=[planner, world_builder, writer, reviewer, polisher, reader_sim],
+            tasks=[plan_task, worldbuild_task, write_task, review_task, polish_task, reader_task],
+            process=Process.sequential,
+            verbose=True,
+            max_rpm=30,
+        )
+        console.print("\n[bold green]🚀 开始执行创作流水线...[/]\n")
+        result = crew.kickoff()
+        _save_outputs(chapter_num, chapter_title, crew, result)
+        console.print(Panel(f"[bold green]✅ 第 {chapter_num} 章创作完成！[/]", expand=False))
+        return str(result)
 
 
 def _save_outputs(chapter_num: int, title: str, crew: Crew, result) -> None:
     """保存章节正文、审查报告和规划"""
-    chapters_dir = PROJECT_ROOT / "chapters"
-    reviews_dir = PROJECT_ROOT / "reviews"
-    plans_dir = PROJECT_ROOT / "plans"
+    chapters_dir = chapter_path(1).parent
+    reviews_root = reviews_dir()
+    plans_root = plans_dir()
 
     chapters_dir.mkdir(parents=True, exist_ok=True)
-    reviews_dir.mkdir(parents=True, exist_ok=True)
-    plans_dir.mkdir(parents=True, exist_ok=True)
+    reviews_root.mkdir(parents=True, exist_ok=True)
+    plans_root.mkdir(parents=True, exist_ok=True)
 
     # 取各Task的产出
     task_outputs = result.tasks_output if hasattr(result, "tasks_output") else []
@@ -424,12 +444,12 @@ def _save_outputs(chapter_num: int, title: str, crew: Crew, result) -> None:
     console.print(f"[green]  📖 章节正文已保存: {ch_path}[/]")
 
     # 保存规划
-    plan_path = plans_dir / f"ch{chapter_num:03d}-plan.md"
+    plan_path = plans_root / f"ch{chapter_num:03d}-plan.md"
     plan_path.write_text(f"# 第{chapter_num}章 场景规划\n\n{plan_text}", encoding="utf-8")
     console.print(f"[green]  📋 场景规划已保存: {plan_path}[/]")
 
     # 保存审查报告
-    review_path = reviews_dir / f"ch{chapter_num:03d}-review.md"
+    review_path = reviews_root / f"ch{chapter_num:03d}-review.md"
     full_review = (
         f"# 第{chapter_num}章 审查报告\n\n{review_text}"
         f"\n\n---\n\n## 读者反馈\n\n{reader_feedback}"
