@@ -12,12 +12,38 @@ import {
   Rocket,
   Workflow,
 } from "lucide-react";
+import { Settings2 } from "lucide-react";
 import { useState } from "react";
 import type { RunSummary, StatusInfo } from "@/lib/types";
+
+export interface PipelineRequest {
+  chapter_num: number;
+  chapter_title: string;
+  auto_run: boolean;
+  mode: "live" | "mock";
+  is_opening: boolean;
+  best_of_n: number;
+  enabled_agents: string[];
+  budget_usd: number | null;
+}
+
+const ALL_AGENTS = [
+  { id: "arc_architect", name: "卷纲" },
+  { id: "planner", name: "策划" },
+  { id: "pacing_doctor", name: "节奏" },
+  { id: "world_builder", name: "世观" },
+  { id: "writer", name: "写手" },
+  { id: "reviewer", name: "审校" },
+  { id: "polisher", name: "润色" },
+  { id: "reader_sim", name: "读模" },
+  { id: "marketing_specialist", name: "营销" },
+];
 
 export function HeroPanel({
   status,
   run,
+  config,
+  onConfigChange,
   onStart,
   onPause,
   onResume,
@@ -25,22 +51,27 @@ export function HeroPanel({
 }: {
   status: StatusInfo | null;
   run: RunSummary | null;
-  onStart: (req: {
-    chapter_num: number;
-    chapter_title: string;
-    auto_run: boolean;
-    mode: "live" | "mock";
-  }) => void;
+  config: PipelineRequest;
+  onConfigChange: (c: PipelineRequest) => void;
+  onStart: (req: PipelineRequest) => void;
   onPause: () => void;
   onResume: () => void;
   onAbort: () => void;
 }) {
-  const [chapterNum, setChapterNum] = useState(1);
-  const [chapterTitle, setChapterTitle] = useState("少年入门");
-  const [autoRun, setAutoRun] = useState(true);
-  const [mode, setMode] = useState<"live" | "mock">("mock");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const setCfg = (patch: Partial<PipelineRequest>) =>
+    onConfigChange({ ...config, ...patch });
 
   const isRunning = run && (run.status === "running" || run.status === "paused");
+
+  const toggleAgent = (id: string) => {
+    const cur = new Set(config.enabled_agents);
+    if (cur.has(id)) cur.delete(id);
+    else cur.add(id);
+    if (cur.size === 0) return;
+    setCfg({ enabled_agents: ALL_AGENTS.map((a) => a.id).filter((x) => cur.has(x)) });
+  };
 
   return (
     <div className="panel-glow relative p-5 md:p-6">
@@ -53,7 +84,7 @@ export function HeroPanel({
             </span>
           </div>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight md:text-3xl">
-            <span className="grad-text">6 个 Agent</span>{" "}
+            <span className="grad-text">9 个 Agent</span>{" "}
             <span className="text-slate-100">协作创作一章玄幻修仙</span>
           </h1>
           <p className="mt-1 max-w-xl text-[13px] text-slate-400">
@@ -89,23 +120,25 @@ export function HeroPanel({
             <input
               type="number"
               min={1}
-              value={chapterNum}
-              onChange={(e) => setChapterNum(parseInt(e.target.value || "1"))}
+              value={config.chapter_num}
+              onChange={(e) =>
+                setCfg({ chapter_num: parseInt(e.target.value || "1") })
+              }
               className="bg-transparent text-sm font-mono text-slate-100 w-full outline-none"
             />
           </Field>
           <Field label="标题">
             <input
               type="text"
-              value={chapterTitle}
-              onChange={(e) => setChapterTitle(e.target.value)}
+              value={config.chapter_title}
+              onChange={(e) => setCfg({ chapter_title: e.target.value })}
               className="bg-transparent text-sm text-slate-100 w-full outline-none"
             />
           </Field>
           <Field label="模式">
             <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as any)}
+              value={config.mode}
+              onChange={(e) => setCfg({ mode: e.target.value as any })}
               className="bg-transparent text-sm text-slate-100 w-full outline-none"
             >
               <option value="mock" className="bg-ink-900">
@@ -118,28 +151,82 @@ export function HeroPanel({
           </Field>
           <Field label="运行方式">
             <button
-              onClick={() => setAutoRun((v) => !v)}
+              onClick={() => setCfg({ auto_run: !config.auto_run })}
               className="text-left w-full text-sm text-slate-100 outline-none"
             >
-              {autoRun ? "自动连续" : "在 写手/润色 暂停"}
+              {config.auto_run ? "自动连续" : "在 写手/润色 暂停"}
             </button>
           </Field>
+
+          <div className="col-span-2 flex flex-wrap items-center gap-1">
+            <button
+              onClick={() => setCfg({ is_opening: !config.is_opening })}
+              className={
+                config.is_opening
+                  ? "badge border-pink-300/40 bg-pink-400/15 text-pink-200"
+                  : "badge border-white/10 bg-white/[0.03] text-slate-400 hover:text-pink-200"
+              }
+            >
+              🚨 开篇 3 章模式
+            </button>
+            <button
+              onClick={() => setShowAdvanced((v) => !v)}
+              className="badge border-cyan-300/30 bg-cyan-400/10 text-cyan-200"
+            >
+              <Settings2 size={10} />
+              Best-of {config.best_of_n} · {config.enabled_agents.length} Agent
+            </button>
+          </div>
+
+          {showAdvanced && (
+            <div className="col-span-2 rounded-xl border border-cyan-300/20 bg-cyan-400/5 p-3">
+              <div className="text-[10px] uppercase tracking-wider text-cyan-300">
+                Best-of-N（写手并行尝试次数）
+              </div>
+              <div className="mt-1 flex gap-1">
+                {[1, 2, 3, 5].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setCfg({ best_of_n: n })}
+                    className={
+                      config.best_of_n === n
+                        ? "rounded-md bg-cyan-400/20 text-cyan-100 border border-cyan-300/40 px-2 py-0.5 text-[11px]"
+                        : "rounded-md bg-white/[0.04] border border-white/10 text-slate-300 px-2 py-0.5 text-[11px]"
+                    }
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 text-[10px] uppercase tracking-wider text-cyan-300">
+                启用 Agent
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {ALL_AGENTS.map((a) => (
+                  <button
+                    key={a.id}
+                    onClick={() => toggleAgent(a.id)}
+                    className={
+                      config.enabled_agents.includes(a.id)
+                        ? "rounded-md bg-cyan-400/20 text-cyan-100 border border-cyan-300/40 px-2 py-0.5 text-[11px]"
+                        : "rounded-md bg-white/[0.04] border border-white/10 text-slate-500 px-2 py-0.5 text-[11px]"
+                    }
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="col-span-2 mt-1 flex items-center gap-2">
             {!isRunning && (
               <motion.button
                 whileTap={{ scale: 0.97 }}
-                onClick={() =>
-                  onStart({
-                    chapter_num: chapterNum,
-                    chapter_title: chapterTitle,
-                    auto_run: autoRun,
-                    mode,
-                  })
-                }
+                onClick={() => onStart(config)}
                 className="btn-primary flex-1"
               >
-                <Rocket size={14} /> 启动 6-Agent 流水线
+                <Rocket size={14} /> 启动 9-Agent 流水线
               </motion.button>
             )}
             {isRunning && run?.status !== "paused" && (

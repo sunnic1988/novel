@@ -226,7 +226,18 @@ output/
 .pytest_cache/
 chapters/ch*.md
 reviews/ch*.md
+reviews/ch*-kpi.json
+reviews/ch*-titles.json
+reviews/ch*-ai-lint.json
 plans/ch*-plan.md
+summaries/ch*.md
+feedback/ch*-comments.md
+bible/foreshadowing.yaml
+bible/highlights.md
+bible/highlights.md.yaml
+bible/marketing_synopsis.md
+bible/characters/*.runtime.yaml
+bible/arcs/*.md
 
 # Frontend
 frontend/node_modules/

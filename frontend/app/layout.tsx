@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Novel Agents · 多Agent 修仙创作仪表盘",
-  description: "6 Agent 协作的玄幻修仙创作系统 — 实时进度 / Token 留痕 / 人工干预",
+  description: "9 Agent 协作的玄幻修仙创作系统 — 卷纲 / 节奏 / 营销 / KPI / 伏笔 / 成本 全链路",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

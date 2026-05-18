@@ -1,8 +1,11 @@
 "use client";
 
 import {
+  Activity,
   Compass,
   Globe,
+  Layers,
+  Megaphone,
   PenLine,
   ShieldCheck,
   Sparkles,
@@ -11,8 +14,11 @@ import {
 } from "lucide-react";
 
 export const AGENT_ICONS: Record<string, LucideIcon> = {
+  Activity,
   Compass,
   Globe,
+  Layers,
+  Megaphone,
   PenLine,
   ShieldCheck,
   Sparkles,

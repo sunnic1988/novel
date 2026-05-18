@@ -11,13 +11,42 @@ from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from novel_agents.book import (
+    character_runtime,
+    foreshadowing,
+    highlights,
+    summaries,
+)
+from novel_agents.book import (
+    cost as cost_mod,
+)
+from novel_agents.book import (
+    feedback as feedback_mod,
+)
+from novel_agents.book import (
+    kpi as kpi_mod,
+)
+from novel_agents.book import (
+    stats as stats_mod,
+)
+from novel_agents.book import (
+    titles as titles_mod,
+)
+from novel_agents.book.ai_taste import analyze as ai_taste_analyze
+from novel_agents.book.paths import ARCS_DIR, ensure_dirs
 from novel_agents.server.events import bus
 from novel_agents.server.models import (
     AGENT_META,
     AGENT_ORDER,
+    BudgetCheckRequest,
+    CharacterRuntimeUpdate,
+    FeedbackItem,
+    ForeshadowingItem,
+    HighlightItem,
     InterventionRequest,
     ReferenceCreateRequest,
     StartRunRequest,
+    SynopsisRequest,
 )
 from novel_agents.server.runner import manager
 
@@ -26,7 +55,7 @@ REFERENCES_DIR = PROJECT_ROOT / "references"
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Novel Agents Dashboard API", version="0.1.0")
+    app = FastAPI(title="Novel Agents Dashboard API", version="0.2.0")
 
     app.add_middleware(
         CORSMiddleware,
@@ -98,6 +127,26 @@ def create_app() -> FastAPI:
         ctrl = manager.create(req)
         await manager.start(ctrl, req)
         return {"run_id": ctrl.run.run_id, "run": ctrl.run.model_dump()}
+
+    @app.post("/api/runs/cost-estimate")
+    def cost_estimate(req: StartRunRequest) -> dict[str, Any]:
+        enabled = (
+            set(req.enabled_agents) if req.enabled_agents else set(AGENT_ORDER)
+        )
+        models = {
+            aid: (
+                "claude-sonnet-4-6"
+                if AGENT_META[aid]["model_kind"] == "creative"
+                else "deepseek-v4-pro"
+            )
+            for aid in AGENT_ORDER
+            if aid in enabled
+        }
+        return cost_mod.estimate_chapter_cost(
+            models,
+            enabled=enabled,
+            best_of_n=max(1, min(req.best_of_n, 5)),
+        )
 
     @app.get("/api/runs")
     def list_runs() -> dict[str, Any]:
@@ -229,12 +278,171 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(500, f"search failed: {exc}") from exc
 
+    # ── 本书数据看板 ──────────────────────────────────────────
+    @app.get("/api/book/dashboard")
+    def book_dashboard() -> dict[str, Any]:
+        ensure_dirs()
+        return stats_mod.book_dashboard()
+
+    @app.get("/api/book/kpi/trends")
+    def book_kpi_trends() -> dict[str, Any]:
+        return stats_mod.kpi_trends()
+
+    @app.get("/api/book/runs")
+    def book_runs() -> dict[str, Any]:
+        return stats_mod.runs_aggregate()
+
+    @app.get("/api/book/pricing")
+    def book_pricing() -> dict[str, Any]:
+        return {"pricing": stats_mod.pricing_table()}
+
+    @app.post("/api/book/cost-alerts")
+    def book_cost_alerts(req: BudgetCheckRequest) -> dict[str, Any]:
+        return stats_mod.cost_alerts(req.budget_usd)
+
+    # ── 伏笔账本 ──────────────────────────────────────────────
+    @app.get("/api/foreshadowing")
+    def list_foreshadowing(current_chapter: int | None = None) -> dict[str, Any]:
+        items = foreshadowing.list_items()
+        return {
+            "items": items,
+            "stats": foreshadowing.stats(current_chapter),
+        }
+
+    @app.post("/api/foreshadowing")
+    def upsert_foreshadowing(item: ForeshadowingItem) -> dict[str, Any]:
+        return foreshadowing.upsert(item.model_dump(exclude_none=True))
+
+    @app.delete("/api/foreshadowing/{item_id}")
+    def delete_foreshadowing(item_id: str) -> dict[str, Any]:
+        ok = foreshadowing.delete(item_id)
+        if not ok:
+            raise HTTPException(404, "foreshadowing item not found")
+        return {"ok": True}
+
+    # ── 金句库 ─────────────────────────────────────────────────
+    @app.get("/api/highlights")
+    def list_highlights() -> dict[str, Any]:
+        items = highlights.load_all()
+        return {
+            "items": [
+                {"chapter": h.chapter, "text": h.text, "tag": h.tag, "score": h.score}
+                for h in items
+            ],
+            "stats": highlights.stats(),
+        }
+
+    @app.post("/api/highlights")
+    def add_highlight(req: HighlightItem) -> dict[str, Any]:
+        h = highlights.add(req.chapter, req.text, req.tag, req.score)
+        return {"chapter": h.chapter, "text": h.text, "tag": h.tag, "score": h.score}
+
+    # ── 角色 runtime ───────────────────────────────────────────
+    @app.get("/api/characters/runtime")
+    def list_character_runtime() -> dict[str, Any]:
+        return {"items": character_runtime.list_all()}
+
+    @app.post("/api/characters/runtime")
+    def update_character_runtime(req: CharacterRuntimeUpdate) -> dict[str, Any]:
+        snap = req.model_dump(exclude={"name", "chapter"}, exclude_none=True)
+        data = character_runtime.append_snapshot(req.name, req.chapter, snap)
+        return data
+
+    # ── KPI ───────────────────────────────────────────────────
+    @app.get("/api/kpi/{chapter}")
+    def get_kpi(chapter: int) -> dict[str, Any]:
+        k = kpi_mod.load(chapter)
+        if not k:
+            raise HTTPException(404, "kpi not found")
+        return k.to_dict()
+
+    @app.get("/api/kpi")
+    def list_kpi() -> dict[str, Any]:
+        return {
+            "items": [k.to_dict() for k in kpi_mod.list_all()],
+            "book_summary": kpi_mod.book_summary(),
+        }
+
+    # ── 章节摘要 ───────────────────────────────────────────────
+    @app.get("/api/summaries/{chapter}")
+    def get_summary(chapter: int) -> dict[str, Any]:
+        text = summaries.load(chapter)
+        if not text:
+            raise HTTPException(404, "summary not found")
+        return {"chapter": chapter, "text": text}
+
+    @app.get("/api/summaries")
+    def list_summaries() -> dict[str, Any]:
+        all_summaries = summaries.list_range(1, 1000)
+        return {
+            "items": [{"chapter": n, "text": t} for n, t in all_summaries],
+            "count": len(all_summaries),
+        }
+
+    # ── 读者反馈 ───────────────────────────────────────────────
+    @app.get("/api/feedback")
+    def list_feedback() -> dict[str, Any]:
+        return {"items": feedback_mod.list_all()}
+
+    @app.post("/api/feedback")
+    def upsert_feedback(item: FeedbackItem) -> dict[str, Any]:
+        feedback_mod.save(item.chapter, item.text)
+        return {"ok": True, "chapter": item.chapter}
+
+    # ── 营销：标题 / 简介 ─────────────────────────────────────
+    @app.get("/api/marketing/titles/{chapter}")
+    def get_titles(chapter: int) -> dict[str, Any]:
+        return {"chapter": chapter, "candidates": titles_mod.load_titles(chapter)}
+
+    @app.get("/api/marketing/synopsis")
+    def get_marketing_synopsis() -> dict[str, Any]:
+        return {"text": titles_mod.load_synopsis()}
+
+    @app.post("/api/marketing/synopsis")
+    def set_marketing_synopsis(req: SynopsisRequest) -> dict[str, Any]:
+        titles_mod.save_synopsis(req.text)
+        return {"ok": True, "chars": len(req.text)}
+
+    # ── 卷纲（arcs） ───────────────────────────────────────────
+    @app.get("/api/arcs")
+    def list_arcs() -> dict[str, Any]:
+        ensure_dirs()
+        items = []
+        for f in sorted(ARCS_DIR.glob("arc_*.md")):
+            stem = f.stem.replace("arc_", "")
+            try:
+                idx = int(stem)
+            except ValueError:
+                idx = 0
+            items.append(
+                {
+                    "index": idx,
+                    "name": f.name,
+                    "text": f.read_text(encoding="utf-8"),
+                }
+            )
+        return {"items": items}
+
+    @app.post("/api/arcs/{index}")
+    def upsert_arc(index: int, body: dict[str, Any]) -> dict[str, Any]:
+        ensure_dirs()
+        from novel_agents.book.paths import arc_path
+
+        p = arc_path(index)
+        p.write_text(body.get("text", ""), encoding="utf-8")
+        return {"ok": True, "name": p.name}
+
+    # ── AI 味在线检测（任意文本） ─────────────────────────────
+    @app.post("/api/ai-taste/analyze")
+    def analyze_ai_taste(body: dict[str, Any]) -> dict[str, Any]:
+        text = body.get("text", "")
+        return ai_taste_analyze(text).to_dict()
+
     # ── WebSocket ─────────────────────────────────────────────
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
         await websocket.accept()
         q = bus.subscribe()
-        # 推送初始快照
         try:
             await websocket.send_text(
                 json.dumps(
@@ -250,7 +458,6 @@ def create_app() -> FastAPI:
                     payload = await asyncio.wait_for(q.get(), timeout=15.0)
                     await websocket.send_text(json.dumps(payload, ensure_ascii=False))
                 except asyncio.TimeoutError:
-                    # heartbeat
                     await websocket.send_text(json.dumps({"kind": "ping"}))
         except WebSocketDisconnect:
             pass
@@ -264,11 +471,19 @@ def create_app() -> FastAPI:
         return JSONResponse(
             {
                 "name": "Novel Agents Dashboard API",
+                "version": "0.2.0",
                 "endpoints": {
                     "agents": "/api/agents",
                     "status": "/api/status",
                     "runs": "/api/runs",
                     "references": "/api/references",
+                    "book": "/api/book/dashboard",
+                    "foreshadowing": "/api/foreshadowing",
+                    "highlights": "/api/highlights",
+                    "characters_runtime": "/api/characters/runtime",
+                    "marketing_titles": "/api/marketing/titles/{chapter}",
+                    "marketing_synopsis": "/api/marketing/synopsis",
+                    "ai_taste": "/api/ai-taste/analyze",
                     "ws": "/ws",
                 },
             }
@@ -279,7 +494,6 @@ def create_app() -> FastAPI:
 
 def _safe_filename(name: str, default_ext: str = ".md") -> str:
     base = Path(name).name.strip() or "untitled"
-    # 仅保留扩展名 .md / .txt
     suffix = Path(base).suffix.lower()
     if suffix not in (".md", ".txt"):
         base = base + default_ext

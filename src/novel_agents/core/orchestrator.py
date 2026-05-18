@@ -41,14 +41,77 @@ def _load_bible_summary() -> str:
 
 
 def _load_previous_chapters(up_to: int, count: int = 3) -> str:
+    """分层 context — 解决长连载 token 爆炸问题。
+
+    - 最近 count 章：完整后 3000 字（防止超长）
+    - 前 10 章：每章 300 字摘要（来自 summaries/）
+    - 全书伏笔账本（账本式条目）
+    - 全书近 5 条读者反馈摘要
+    """
     chapters_dir = PROJECT_ROOT / "chapters"
-    parts = []
+    parts: list[str] = []
+
+    # 最近 count 章原文
+    recent = []
     for i in range(max(1, up_to - count), up_to):
         ch_file = chapters_dir / f"ch{i:03d}.md"
         if ch_file.exists():
             content = ch_file.read_text(encoding="utf-8")
-            parts.append(f"### 第{i}章\n{content[-3000:]}")
+            recent.append(f"### 第{i}章原文（截尾 3000 字）\n{content[-3000:]}")
+    if recent:
+        parts.append("## 最近章节（完整片段）\n" + "\n\n".join(recent))
+
+    # 更前面的章节摘要
+    try:
+        from novel_agents.book import summaries as _sums
+
+        older_summaries = _sums.list_range(max(1, up_to - count - 10), up_to - count)
+        if older_summaries:
+            sm = "\n".join(f"- 第{n}章：{t}" for n, t in older_summaries)
+            parts.append("## 更早章节摘要（最多 10 章）\n" + sm)
+    except Exception:
+        pass
+
+    # 伏笔账本（账本式）
+    try:
+        from novel_agents.book import foreshadowing as _fs
+
+        fs_items = _fs.list_items()
+        if fs_items:
+            lines = [f"- {it.get('id')} | {it.get('title')} | "
+                     f"埋于 {it.get('planted_chapter')} 章 | "
+                     f"计划回收 {it.get('planned_payoff_chapter')} 章 | "
+                     f"状态 {it.get('status')}"
+                     for it in fs_items]
+            parts.append("## 伏笔账本（仅供参考，写作时注意呼应）\n" + "\n".join(lines))
+    except Exception:
+        pass
+
+    # 近 3 条读者反馈
+    try:
+        from novel_agents.book import feedback as _fb
+
+        fb_text = _fb.latest_for_planning(up_to, max_chapters=3)
+        if fb_text:
+            parts.append("## 近期读者反馈（反向输入到本章）\n" + fb_text)
+    except Exception:
+        pass
+
     return "\n\n".join(parts) if parts else "（无前文）"
+
+
+OPENING_GUIDANCE = """
+## 🚨 开篇黄金 3 章特殊要求（必读）
+
+读者前 3 章弃书率 > 90%，本章必须满足以下任务：
+1. **第 1-3 段必有钩子**：开篇即冲突/对话/异象，禁用环境铺垫开场
+2. **第 1 章必现金手指**：重生记忆 / 觉醒系统 / 神秘宝物 至少亮一个（不必全开发挥）
+3. **共情锚点**：主角必须有一个能让读者代入的"恨/痛/不甘"
+4. **第一次小爽点**：本章末段必须有"反差/打脸/碾压/逆袭"中的至少一项
+5. **悬念 3 层**：本章悬念 + 下章悬念 + 长线大悬念，各埋一个
+6. **配角钩子**：至少有一个"以后还要回收"的反派/红颜
+7. **章末钩子等级 S**：禁用平稳收尾，必须是"读者下一秒就想点开下一章"
+"""
 
 
 def _load_chapter_plan(chapter_num: int) -> str:
@@ -61,6 +124,7 @@ def run_chapter_pipeline(
     chapter_title: str = "",
     max_review_rounds: int = 3,
     synopsis_override: str = "",
+    is_opening: bool | None = None,
 ) -> str:
     """执行单章创作流水线"""
 
@@ -85,10 +149,16 @@ def run_chapter_pipeline(
     polisher = create_polisher()
     reader_sim = create_reader_sim()
 
+    # 开篇 3 章特化（自动检测或显式标记）
+    if is_opening is None:
+        is_opening = chapter_num <= 3
+    opening_section = OPENING_GUIDANCE if is_opening else ""
+
     shared_context = (
         f"## 故事总纲\n{synopsis}\n\n"
         f"## 世界观设定摘要\n{bible_summary}\n\n"
         f"## 前文回顾（最近章节）\n{prev_chapters}\n\n"
+        f"{opening_section}\n"
         f"## 当前章节：第{chapter_num}章 {chapter_title}"
     )
 
@@ -294,3 +364,45 @@ def _save_outputs(chapter_num: int, title: str, crew: Crew, result) -> None:
     # 向量化已写章节
     ingest_chapter(chapter_num, final_text)
     console.print("[green]  🔍 章节已向量化入库[/]")
+
+    # 章节副产物入账（live 模式下也产出，但 KPI 字段为粗估）
+    try:
+        from novel_agents.book import (
+            ai_taste,
+        )
+        from novel_agents.book import (
+            kpi as kpi_mod,
+        )
+        from novel_agents.book import (
+            summaries as sum_mod,
+        )
+
+        # 章节摘要（规则法兜底；live 模式后续可由独立摘要 Agent 替换）
+        summary_text = sum_mod.auto_summarize(final_text)
+        sum_mod.save(chapter_num, summary_text)
+
+        # AI 味硬检测
+        lint = ai_taste.analyze(final_text)
+        import json as _json
+
+        from novel_agents.book.paths import ai_lint_path
+
+        ai_lint_path(chapter_num).write_text(
+            _json.dumps(lint.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        # KPI（基于 reviewer 文本启发式提取；后续可被结构化 LLM 替换）
+        word_count = sum(1 for c in final_text if "\u4e00" <= c <= "\u9fff")
+        kpi_obj = kpi_mod.ChapterKPI(
+            chapter=chapter_num,
+            title=title,
+            word_count=word_count,
+            ai_taste_score=lint.score,
+            # 粗略评分占位 — 实际 reviewer 应输出结构化 JSON
+            overall_score=0.7,
+        )
+        kpi_mod.save(kpi_obj)
+        console.print("[green]  📊 KPI / 摘要 / AI 味 lint 已入账[/]")
+    except Exception as exc:
+        console.print(f"[yellow]  ⚠ 账本写入失败: {exc}[/]")
