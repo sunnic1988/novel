@@ -25,6 +25,28 @@ def _clean_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
     return cleaned_messages or messages
 
 
+def _to_incremental_text(full_text: str, incoming: str) -> str:
+    """将上游返回内容统一折算为“净增量”文本，兼容 delta / 累积 / 重叠片段。"""
+    if not incoming:
+        return ""
+    if not full_text:
+        return incoming
+    if incoming == full_text:
+        return ""
+    # 上游直接返回“到当前为止的完整内容”
+    if incoming.startswith(full_text):
+        return incoming[len(full_text) :]
+    # 纯重复片段
+    if full_text.endswith(incoming):
+        return ""
+    # 一般重叠：取 full_text 后缀与 incoming 前缀最大重叠
+    max_overlap = min(len(full_text), len(incoming))
+    for k in range(max_overlap, 0, -1):
+        if full_text[-k:] == incoming[:k]:
+            return incoming[k:]
+    return incoming
+
+
 class APIMartLLM(LLM):
     """适配APIMart的LLM包装器 — 使用流式模式收集完整响应以兼容APIMart强制流式返回"""
 
@@ -147,9 +169,14 @@ def stream_outline_chat(messages: list[dict[str, str]], chapter_num: int = 1) ->
         api_key=_get_api_key(),
         api_base=APIMART_BASE_URL,
     )
+    full_text = ""
     for chunk in response:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
         if delta and delta.content:
-            yield delta.content
+            piece = _to_incremental_text(full_text, delta.content)
+            if not piece:
+                continue
+            full_text += piece
+            yield piece

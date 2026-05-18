@@ -37,6 +37,43 @@ function collapseDoubledTextIfNeeded(text: string): string {
   return out.join("");
 }
 
+function collapseRepeatedPhrasesIfNeeded(text: string): string {
+  const compact = text.replace(/\s+/g, "");
+  if (compact.length < 40) return text;
+  let repeatedHits = 0;
+  let checks = 0;
+  for (let i = 0; i + 3 < compact.length; i += 1) {
+    const a = compact.slice(i, i + 2);
+    const b = compact.slice(i + 2, i + 4);
+    checks += 1;
+    if (a === b) repeatedHits += 1;
+  }
+  if (checks < 10 || repeatedHits / checks < 0.18) return text;
+
+  const chars = [...text];
+  const out: string[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    let collapsed = false;
+    for (let span = 6; span >= 1; span -= 1) {
+      if (i + span * 2 > chars.length) continue;
+      const a = chars.slice(i, i + span).join("");
+      const b = chars.slice(i + span, i + span * 2).join("");
+      if (a === b) {
+        out.push(a);
+        i += span * 2;
+        collapsed = true;
+        break;
+      }
+    }
+    if (!collapsed) {
+      out.push(chars[i]);
+      i += 1;
+    }
+  }
+  return out.join("");
+}
+
 const INITIAL_MESSAGE: ChatMessage = {
   role: "assistant",
   content:
@@ -98,36 +135,22 @@ export function OutlineWizard({
     setBusy(true);
     setError("");
     try {
-      const full = await api.chatOutline(
-        {
-          messages: history,
-          chapter_num: chapterNum,
-          script_id: scriptId,
-        },
-        (delta) => {
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (!last || last.role !== "assistant") {
-              next.push({ role: "assistant", content: delta });
-              return next;
-            }
-            last.content += delta;
-            return next;
-          });
-        }
+      const full = await api.chatOutline({
+        messages: history,
+        chapter_num: chapterNum,
+        script_id: scriptId,
+      });
+      const normalized = collapseRepeatedPhrasesIfNeeded(
+        collapseDoubledTextIfNeeded(full)
       );
-      const normalized = collapseDoubledTextIfNeeded(full);
-      if (normalized !== full) {
-        setMessages((prev) => {
-          const next = [...prev];
-          const last = next[next.length - 1];
-          if (last && last.role === "assistant") {
-            last.content = normalized;
-          }
-          return next;
-        });
-      }
+      setMessages((prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last && last.role === "assistant") {
+          last.content = normalized;
+        }
+        return next;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败，请稍后重试");
     } finally {

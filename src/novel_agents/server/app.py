@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from novel_agents.book import (
     character_runtime,
@@ -167,32 +167,15 @@ def create_app() -> FastAPI:
         )
 
     @app.post("/api/outline/chat")
-    def outline_chat(req: OutlineChatRequest) -> StreamingResponse:
+    def outline_chat(req: OutlineChatRequest) -> dict[str, Any]:
         import os
 
         if not os.getenv("APIMART_API_KEY"):
             raise HTTPException(400, "APIMART_API_KEY is required")
 
-        def event_stream() -> Any:
-            try:
-                msg_payload = [m.model_dump() for m in req.messages]
-                for chunk in stream_outline_chat(msg_payload, req.chapter_num):
-                    payload = {"type": "delta", "delta": chunk}
-                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-                yield "data: " + json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
-            except Exception as exc:
-                payload = {"type": "error", "detail": str(exc)}
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
+        msg_payload = [m.model_dump() for m in req.messages]
+        full_text = "".join(stream_outline_chat(msg_payload, req.chapter_num))
+        return {"text": full_text}
 
     @app.get("/api/runs")
     def list_runs(script_id: str | None = None) -> dict[str, Any]:
