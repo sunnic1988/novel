@@ -154,7 +154,7 @@ export function TracePanel({
         </AnimatePresence>
         {filtered.length === 0 && (
           <div className="grid h-full place-items-center text-xs text-slate-600">
-            — 暂无事件，启动一次创作即可看到 6 Agent 的实时留痕 —
+            — 暂无事件，启动一次创作即可看到 9 Agent 的实时留痕 —
           </div>
         )}
       </div>

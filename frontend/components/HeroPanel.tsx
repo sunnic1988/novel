@@ -84,7 +84,7 @@ export function HeroPanel({
             </span>
           </div>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight md:text-3xl">
-            <span className="grad-text">6 个 Agent</span>{" "}
+            <span className="grad-text">9 个 Agent</span>{" "}
             <span className="text-slate-100">协作创作一章玄幻修仙</span>
           </h1>
           <p className="mt-1 max-w-xl text-[13px] text-slate-400">
