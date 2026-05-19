@@ -30,4 +30,4 @@ NEXT_PUBLIC_API_BASE=http://your-host:8765 npm run dev
 - 启动 / 暂停 / 继续 / 终止 流水线
 - 任意 Agent 完成或运行中均可一键人工干预（编辑产出后续传下一阶段）
 - 爆款范文上传 / 删除 / 一键向量化 / 语义检索
-- `Live` 模式调用真实 LLM；`Mock` 模式可在无 API Key 下完整演示 UI
+- 调用真实 LLM（需配置 `APIMART_API_KEY`）

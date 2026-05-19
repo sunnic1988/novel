@@ -31,7 +31,7 @@ def list_range(start: int, end: int) -> list[tuple[int, str]]:
 
 
 def auto_summarize(chapter_text: str, max_chars: int = 280) -> str:
-    """规则法兜底摘要 — Mock 模式或 LLM 失败时使用。
+    """规则法兜底摘要 — LLM 未产出摘要时使用。
 
     取第一段开篇 + 主要冲突段落 + 章末钩子。
     """

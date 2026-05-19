@@ -10,13 +10,15 @@
 
 ### 常用命令
 
-参见 `README.md` 和 `pyproject.toml [project.scripts]`。核心CLI：
+参见 `README.md` 和 `pyproject.toml [project.scripts]`。核心 CLI：
 
-- `novel init` — 初始化目录
+- `novel init` — 初始化目录与故事圣经模板
 - `novel ingest` — 向量化范文
 - `novel status` — 查看项目状态
-- `novel write <章节号> -t "标题"` — 创作一章（需配置API密钥）
+- `novel serve` — 启动仪表盘后端 API
+- `novel write <章节号> -t "标题"` — 创作一章（需配置 API 密钥）
 - `novel search <关键词>` — 搜索范文库
+- `python start.py` — 一键启动前后端仪表盘
 
 ### 测试和Lint
 

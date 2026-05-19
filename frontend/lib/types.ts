@@ -45,7 +45,7 @@ export interface RunSummary {
   script_name: string;
   chapter_num: number;
   chapter_title: string;
-  mode: "live" | "mock";
+  mode: "live";
   status: RunStatus;
   auto_run: boolean;
   created_at: number;

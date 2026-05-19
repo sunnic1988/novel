@@ -1,7 +1,7 @@
 """Run 生命周期管理 — 启动 / 暂停 / 干预 / 终止 9 Agent 流水线
 
-Mock 模式下每轮 run 会同步生成一份完整的「章节副产物包」：
-KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint / 章节摘要 / 简介候选 / 成本估算。
+每轮 Live run 完成后写入章节副产物包：
+KPI / 标题 / 金句 / AI 味 lint / 章节摘要等（基于各 Agent 真实输出）。
 """
 
 from __future__ import annotations
@@ -15,14 +15,12 @@ from pathlib import Path
 from typing import Any
 
 from novel_agents.book import (
-    character_runtime,
-    feedback,
-    foreshadowing,
-    highlights,
-    summaries,
+    cost as cost_mod,
 )
 from novel_agents.book import (
-    cost as cost_mod,
+    feedback,
+    highlights,
+    summaries,
 )
 from novel_agents.book import (
     kpi as kpi_mod,
@@ -32,20 +30,8 @@ from novel_agents.book import (
 )
 from novel_agents.book.ai_taste import analyze as ai_taste_analyze
 from novel_agents.book.paths import ai_lint_path, ensure_dirs, use_script
-from novel_agents.server.events import bus
 from novel_agents.server import storage_sqlite
-from novel_agents.server.mock_data import (
-    MOCK_AI_LINT_SAMPLE,
-    MOCK_CHARACTER_UPDATES,
-    MOCK_FORESHADOWING_PLANTS,
-    MOCK_HIGHLIGHTS,
-    MOCK_OUTPUTS,
-    MOCK_STEPS,
-    MOCK_SUMMARY,
-    MOCK_SYNOPSIS_CANDIDATES,
-    MOCK_TITLE_CANDIDATES,
-    randomize_kpi,
-)
+from novel_agents.server.events import bus
 from novel_agents.server.models import (
     AGENT_META,
     AGENT_ORDER,
@@ -149,7 +135,7 @@ class RunManager:
             script_name="默认剧本",
             chapter_num=req.chapter_num,
             chapter_title=req.chapter_title,
-            mode=req.mode,
+            mode="live",
             auto_run=req.auto_run,
             status="queued",
             agents=agents,
@@ -395,20 +381,17 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
         )
 
         try:
-            if run.mode == "live":
-                ok = await _run_live(ctrl, req)
-                if not ok:
-                    run.status = "error"
-                    _write_run_state(run)
-                    await bus.publish_run_update(run)
-                    return
-            else:
-                await _run_mock(ctrl)
+            ok = await _run_live(ctrl, req)
+            if not ok:
+                run.status = "error"
+                _write_run_state(run)
+                await bus.publish_run_update(run)
+                return
 
             if ctrl.abort_event.is_set():
                 return
 
-            # 章节副产物入账（mock / live 均执行；live 下 KPI 由 reviewer 给）
+            # 章节副产物入账（基于各 Agent 真实输出）
             try:
                 await _persist_chapter_artifacts(ctrl)
             except Exception as exc:  # pragma: no cover
@@ -444,172 +427,28 @@ async def _run_pipeline(ctrl: RunController, req: StartRunRequest) -> None:
             await _emit(run.run_id, "run_error", message=f"流水线异常: {exc}")
 
 
-async def _run_mock(ctrl: RunController) -> None:
-    run = ctrl.run
-
-    for idx, aid in enumerate(AGENT_ORDER):
-        if ctrl.abort_event.is_set():
-            return
-        agent = _find_agent(run, aid)
-        if aid not in ctrl.enabled_agents:
-            await _emit(
-                run.run_id, "agent_skipped", agent=aid, message=f"{agent.name} 已禁用，跳过"
-            )
-            continue
-        await _execute_mock_agent(ctrl, agent, idx)
-        if ctrl.abort_event.is_set():
-            return
-        if ctrl.step_confirm_mode:
-            await _await_intervention(ctrl, agent)
+def _chapter_body(ctrl: RunController) -> str:
+    return (
+        ctrl.agent_outputs.get("polisher")
+        or ctrl.agent_outputs.get("writer")
+        or ""
+    ).strip()
 
 
-async def _execute_mock_agent(
-    ctrl: RunController, agent: AgentStatus, idx: int
-) -> None:
-    run = ctrl.run
-    agent.status = "running"
-    agent.started_at = now_ms()
-    agent.progress = 0.0
-    agent.last_message = "启动中…"
-    await bus.publish_run_update(run)
-    await _emit(
-        run.run_id,
-        "agent_started",
-        agent=agent.id,
-        message=f"{agent.name} 开始工作 · 使用模型 {agent.model}",
-        data={"model": agent.model, "uses_references": agent.uses_references},
-    )
+def _extract_highlight_lines(text: str, max_lines: int = 3) -> list[str]:
+    lines: list[str] = []
+    for raw in text.replace("。", "。\n").split("\n"):
+        line = raw.strip()
+        if 12 <= len(line) <= 48 and line not in lines:
+            lines.append(line)
+        if len(lines) >= max_lines:
+            break
+    return lines
 
-    steps, (lo, hi) = MOCK_STEPS.get(agent.id, (4, (0.3, 0.7)))
-    outputs = MOCK_OUTPUTS.get(agent.id, [f"{agent.name} 正在工作…"])
 
-    if agent.uses_references:
-        await asyncio.sleep(random.uniform(0.2, 0.4))
-        await ctrl.wait_if_paused()
-        agent.tool_calls += 1
-        agent.last_message = "🔍 调用爆款范文检索…"
-        await bus.publish_run_update(run)
-        await _emit(
-            run.run_id,
-            "agent_tool_call",
-            agent=agent.id,
-            message="调用工具：爆款范文检索",
-            data={"tool": "ReferenceSearchTool", "query": f"第{run.chapter_num}章 关键场景"},
-        )
-
-    accumulated_chunks: list[str] = []
-    # 开篇 3 章特殊处理：strict pacing 警告
-    if ctrl.is_opening and agent.id == "pacing_doctor":
-        await _emit(
-            run.run_id,
-            "agent_thinking",
-            agent=agent.id,
-            message="🚨 开篇 3 章特化：必须在前 800 字完成金手指亮相 + 角色钩子。",
-        )
-    # writer best_of_n
-    if agent.id == "writer" and ctrl.best_of_n > 1:
-        await _emit(
-            run.run_id,
-            "agent_thinking",
-            agent=agent.id,
-            message=f"⚙ Best-of-{ctrl.best_of_n} 并行试写中（mock 下汇总最佳版本）",
-            data={"best_of_n": ctrl.best_of_n},
-        )
-
-    for step in range(steps):
-        if ctrl.abort_event.is_set():
-            return
-        await ctrl.wait_if_paused()
-        await asyncio.sleep(random.uniform(lo, hi))
-        chunk = outputs[step % len(outputs)]
-        accumulated_chunks.append(chunk)
-        p_tok = random.randint(180, 380)
-        c_tok = random.randint(120, 360)
-        if agent.id == "writer" and ctrl.best_of_n > 1:
-            p_tok *= ctrl.best_of_n
-            c_tok *= ctrl.best_of_n
-        latency = int(random.uniform(lo, hi) * 1000)
-        agent.prompt_tokens += p_tok
-        agent.completion_tokens += c_tok
-        agent.total_tokens = agent.prompt_tokens + agent.completion_tokens
-        agent.llm_calls += 1
-        agent.latency_ms += latency
-        agent.progress = (step + 1) / steps
-        agent.last_message = chunk[:80]
-        agent.output_preview = "\n".join(accumulated_chunks)[:OUTPUT_PREVIEW_LIMIT]
-
-        run.total_prompt_tokens += p_tok
-        run.total_completion_tokens += c_tok
-        run.total_tokens = run.total_prompt_tokens + run.total_completion_tokens
-        run.total_llm_calls += 1
-
-        ctrl.call_index += 1
-        call_id = f"{run.run_id}-{agent.id}-{ctrl.call_index}"
-        prompt_full = (
-            f"[MOCK] agent={agent.id}, step={step + 1}/{steps}, "
-            f"chapter={run.chapter_num}, title={run.chapter_title or '未命名'}\n"
-            "请基于当前上下文生成该步骤输出。"
-        )
-        response_full = chunk
-        _persist_agent_call(
-            run_id=run.run_id,
-            agent_id=agent.id,
-            step_index=idx + 1,
-            call_id=call_id,
-            prompt_full=prompt_full,
-            response_full=response_full,
-            meta={
-                "mode": run.mode,
-                "model": agent.model,
-                "prompt_tokens": p_tok,
-                "completion_tokens": c_tok,
-                "latency_ms": latency,
-                "step": step + 1,
-                "total_steps": steps,
-            },
-        )
-        await bus.publish_run_update(run)
-        await _emit(
-            run.run_id,
-            "agent_llm_call",
-            agent=agent.id,
-            message=chunk,
-            data={
-                "call_id": call_id,
-                "agent_id": agent.id,
-                "step_index": step + 1,
-                "step": step + 1,
-                "total_steps": steps,
-                "prompt_full": prompt_full,
-                "response_full": response_full,
-                "prompt_tokens": p_tok,
-                "completion_tokens": c_tok,
-                "latency_ms": latency,
-                "model": agent.model,
-                "token_usage": {"prompt": p_tok, "completion": c_tok, "total": p_tok + c_tok},
-            },
-        )
-
-    agent.status = "done"
-    agent.completed_at = now_ms()
-    agent.progress = 1.0
-    agent.last_message = "✓ 完成"
-    ctrl.agent_outputs[agent.id] = agent.output_preview
-    await bus.publish_run_update(run)
-    await _emit(
-        run.run_id,
-        "agent_completed",
-        agent=agent.id,
-        message=(
-            f"{agent.name} 完成（用时 "
-            f"{(agent.completed_at - (agent.started_at or 0)) / 1000:.1f}s, "
-            f"token {agent.total_tokens:,}）"
-        ),
-        data={
-            "output_preview": agent.output_preview,
-            "total_tokens": agent.total_tokens,
-        },
-    )
+def _default_title_candidates(chapter: int, title: str) -> list[dict[str, Any]]:
+    base = title.strip() or f"第{chapter}章"
+    return [{"title": base, "angle": "章节主标题", "score": 7.5}]
 
 
 async def _await_intervention(ctrl: RunController, agent: AgentStatus) -> None:
@@ -672,13 +511,14 @@ async def _await_retry(ctrl: RunController, agent: AgentStatus) -> bool:
 
 
 async def _persist_chapter_artifacts(ctrl: RunController) -> None:
-    """章节完成后写入：摘要 / KPI / 标题 / 金句 / 伏笔变动 / 角色 runtime / AI 味 lint"""
+    """章节完成后写入：摘要 / KPI / 标题 / 金句 / AI 味 lint（基于 Agent 真实输出）"""
     run = ctrl.run
     n = run.chapter_num
     ensure_dirs()
+    body = _chapter_body(ctrl)
+    word_count = len(body) if body else 0
 
-    # 1. 章节摘要
-    summary_text = MOCK_SUMMARY
+    summary_text = summaries.auto_summarize(body) if body else f"第{n}章（暂无正文）"
     summaries.save(n, summary_text)
     await _emit(
         run.run_id,
@@ -688,12 +528,11 @@ async def _persist_chapter_artifacts(ctrl: RunController) -> None:
         data={"kind": "summary", "chars": len(summary_text)},
     )
 
-    # 2. KPI（mock 自动浮动；live 模式由 reviewer 给出）
-    k = randomize_kpi(n)
+    k = kpi_mod.fallback_scores(n)
     kpi_obj = kpi_mod.ChapterKPI(
         chapter=n,
         title=run.chapter_title,
-        word_count=2500 + random.randint(-200, 400),
+        word_count=word_count or max(800, 2000 + random.randint(-200, 400)),
         run_id=run.run_id,
         enabled_agents=list(ctrl.enabled_agents),
         **k,
@@ -709,94 +548,62 @@ async def _persist_chapter_artifacts(ctrl: RunController) -> None:
         data={"kind": "kpi", **k},
     )
 
-    # 3. AI 味硬检测（基于 mock 文本运行真实算法）
-    polished_text = "\n".join(MOCK_OUTPUTS["polisher"])
-    try:
-        lint = ai_taste_analyze(polished_text)
-        lint_dict = lint.to_dict()
-    except Exception:
-        lint_dict = MOCK_AI_LINT_SAMPLE
     import json as _json
+
+    if body:
+        try:
+            lint_dict = ai_taste_analyze(body).to_dict()
+        except Exception:
+            lint_dict = {"score": 0.0, "level": "未知", "issues": [], "suggestions": []}
+    else:
+        lint_dict = {"score": 0.0, "level": "无正文", "issues": [], "suggestions": []}
     ai_lint_path(n).write_text(
         _json.dumps(lint_dict, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     await _emit(
         run.run_id,
         "artifact_saved",
-        message=f"🔍 AI 味检测：score={lint_dict['score']} / {lint_dict.get('level','—')}",
+        message=f"🔍 AI 味检测：score={lint_dict['score']} / {lint_dict.get('level', '—')}",
         data={"kind": "ai_lint", **lint_dict},
     )
 
-    # 4. 金句库
-    for line in MOCK_HIGHLIGHTS:
+    highlight_lines = _extract_highlight_lines(body)
+    for line in highlight_lines:
         highlights.add(n, line, tag="情绪", score=4.5)
-    await _emit(
-        run.run_id,
-        "artifact_saved",
-        message=f"✨ 已沉淀 {len(MOCK_HIGHLIGHTS)} 句金句入金句库",
-        data={"kind": "highlights", "count": len(MOCK_HIGHLIGHTS)},
-    )
-
-    # 5. 标题候选
-    titles_mod.save_titles(n, MOCK_TITLE_CANDIDATES)
-    await _emit(
-        run.run_id,
-        "artifact_saved",
-        message=f"🎯 已生成 {len(MOCK_TITLE_CANDIDATES)} 个标题候选",
-        data={"kind": "titles", "candidates": MOCK_TITLE_CANDIDATES},
-    )
-
-    # 6. 简介迭代候选
-    syn_text = "# 书籍简介候选\n\n" + "\n\n---\n\n".join(
-        f"## 候选 {i + 1}\n{t}" for i, t in enumerate(MOCK_SYNOPSIS_CANDIDATES)
-    )
-    titles_mod.save_synopsis(syn_text)
-    await _emit(
-        run.run_id,
-        "artifact_saved",
-        message=f"📖 书籍简介已迭代为 {len(MOCK_SYNOPSIS_CANDIDATES)} 个候选",
-        data={"kind": "synopsis_candidates", "count": len(MOCK_SYNOPSIS_CANDIDATES)},
-    )
-
-    # 7. 伏笔账本变动（章节号映射）
-    for item in MOCK_FORESHADOWING_PLANTS:
-        clone = dict(item)
-        # 调整 planted/planned 章节号相对当前章节
-        clone["planted_chapter"] = n
-        if isinstance(clone.get("planned_payoff_chapter"), int):
-            clone["planned_payoff_chapter"] = n + (
-                clone["planned_payoff_chapter"] - 1
-            )
-        foreshadowing.upsert(clone)
-    fs_stat = foreshadowing.stats(current_chapter=n)
-    await _emit(
-        run.run_id,
-        "artifact_saved",
-        message=(
-            f"📌 伏笔账本更新：累计 {fs_stat['total']} 个，"
-            f"未回收 {fs_stat['open']}，逾期 {fs_stat['overdue']}"
-        ),
-        data={"kind": "foreshadowing", **fs_stat},
-    )
-
-    # 8. 角色 runtime 更新
-    for upd in MOCK_CHARACTER_UPDATES:
-        character_runtime.append_snapshot(upd["name"], n, upd["snapshot"])
-    await _emit(
-        run.run_id,
-        "artifact_saved",
-        message=(
-            f"🪄 已更新 {len(MOCK_CHARACTER_UPDATES)} 个角色的 runtime 状态"
-        ),
-        data={"kind": "character_runtime", "count": len(MOCK_CHARACTER_UPDATES)},
-    )
-
-    # 9. 章末读者反馈占位（用户可以从 UI 输入）
-    if not feedback.load(n):
-        feedback.save(
-            n,
-            "（这里输入读者评论摘要，会反向喂给下一章规划。Mock 模式自动留空。）",
+    if highlight_lines:
+        await _emit(
+            run.run_id,
+            "artifact_saved",
+            message=f"✨ 已沉淀 {len(highlight_lines)} 句金句入金句库",
+            data={"kind": "highlights", "count": len(highlight_lines)},
         )
+
+    title_candidates = _default_title_candidates(n, run.chapter_title)
+    marketing = (ctrl.agent_outputs.get("marketing_specialist") or "").strip()
+    if marketing and len(marketing) > 20:
+        title_candidates = [
+            {"title": marketing.split("\n")[0][:60], "angle": "营销 Agent", "score": 8.0},
+            *title_candidates,
+        ]
+    titles_mod.save_titles(n, title_candidates)
+    await _emit(
+        run.run_id,
+        "artifact_saved",
+        message=f"🎯 已生成 {len(title_candidates)} 个标题候选",
+        data={"kind": "titles", "candidates": title_candidates},
+    )
+
+    if marketing and len(marketing) > 80:
+        titles_mod.save_synopsis(f"# 书籍简介\n\n{marketing[:2000]}")
+        await _emit(
+            run.run_id,
+            "artifact_saved",
+            message="📖 书籍简介已根据营销 Agent 输出更新",
+            data={"kind": "synopsis_candidates", "count": 1},
+        )
+
+    if not feedback.load(n):
+        feedback.save(n, "（在此填写读者评论摘要，将反向喂给下一章规划。）")
 
 
 async def _run_live(ctrl: RunController, req: StartRunRequest) -> bool:

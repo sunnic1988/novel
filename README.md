@@ -4,74 +4,118 @@
 
 ## 核心特性
 
-- **6个专业Agent** — 策划师、世界观师、写手、审校师、润色师、读者模拟
-- **CrewAI编排** — 流水线式章节创作，每章经过规划→写作→审校→润色→读者反馈
-- **Claude + DeepSeek混用** — 创意写作用Claude，分析推理用DeepSeek
-- **爆款范文向量化** — 内置修仙经典桥段参考库，ChromaDB驱动
-- **通用玄幻修仙** — 预置力量体系模板、文风指南，适配各类修仙题材
+- **9个专业Agent** — 卷纲架构、策划、节奏、世界观、写手、审校、润色、读者模拟、营销
+- **CrewAI编排** — 流水线式章节创作，规划→写作→审校→润色→读者反馈→营销包装
+- **Claude + DeepSeek混用** — 创意写作用 Claude，分析推理用 DeepSeek
+- **爆款范文向量化** — 内置修仙经典桥段参考库，ChromaDB 驱动
+- **Web 仪表盘** — 实时进度、事件留痕、人工干预、范文管理与书籍运营面板
 
 ## 快速开始
 
 ```bash
-# 安装依赖
-pip install -e ".[dev]"
+# 1. 安装依赖（推荐 uv）
+uv venv .venv
+uv pip install -e ".[dev]"
 
-# 配置API密钥（使用APIMart聚合平台，一个Key访问所有模型）
+# 2. 配置 API Key（APIMart 聚合平台，一个 Key 访问 Claude/DeepSeek 等）
 cp .env.example .env
-# 编辑 .env，填入 APIMART_API_KEY（从 https://apimart.ai/keys 获取）
+# 编辑 .env，填入 APIMART_API_KEY：https://apimart.ai/keys
 
-# 初始化项目
-novel init
+# 3. 初始化项目（目录 + 故事圣经模板 + 大纲模板）
+.venv/bin/novel init
 
-# 导入爆款范文到向量库
-novel ingest
+# 4. 导入爆款范文到向量库
+.venv/bin/novel ingest
 
-# 查看项目状态
-novel status
-
-# 创作第一章
-novel write 1 -t ""
+# 5. 查看状态
+.venv/bin/novel status
 ```
 
-## Agent角色分工
+### 一键启动仪表盘（推荐）
+
+```bash
+cd frontend && npm install && cd ..
+python start.py
+# 前端 → http://127.0.0.1:3000
+# 后端 → http://127.0.0.1:8765
+```
+
+### 分步启动
+
+```bash
+# 终端 1：后端 API
+novel serve --port 8765
+
+# 终端 2：前端
+cd frontend && npm install && npm run dev
+# → http://localhost:3000
+```
+
+前端通过 `next.config.mjs` 将 `/api/*` 与 `/ws` 代理到后端。自定义后端地址：
+
+```bash
+NEXT_PUBLIC_API_BASE=http://127.0.0.1:8765 npm run dev
+```
+
+### CLI 创作单章
+
+```bash
+novel write 1 -t "少年入门"
+```
+
+> 仪表盘与 CLI 创作均需要有效的 `APIMART_API_KEY`。
+
+## Agent 角色分工
 
 | Agent | 角色 | 使用模型 | 职责 |
 |-------|------|---------|------|
-| 策划师 | Planner | DeepSeek V3.1 | 场景beats、节奏曲线、钩子设计 |
-| 世界观师 | WorldBuilder | DeepSeek V3.1 | 设定管理、人物卡、力量体系 |
-| 写手 | Writer | Claude Sonnet 4.6 | 章节正文撰写 |
-| 审校师 | Reviewer | DeepSeek V3.1 | 十维度质量审查 |
-| 润色师 | Polisher | Claude Sonnet 4.6 | 去AI味、语言精修 |
-| 读者模拟 | ReaderSim | DeepSeek V3.1 | 模拟目标读者反馈 |
+| 卷纲架构师 | ArcArchitect | DeepSeek | 卷级结构与长线伏笔 |
+| 策划师 | Planner | DeepSeek | 场景 beats、节奏曲线、钩子设计 |
+| 节奏医生 | PacingDoctor | DeepSeek | 开篇/高潮节奏诊断 |
+| 世界观师 | WorldBuilder | DeepSeek | 设定管理、人物卡、力量体系 |
+| 写手 | Writer | Claude | 章节正文撰写 |
+| 审校师 | Reviewer | DeepSeek | 十维度质量审查 |
+| 润色师 | Polisher | Claude | 去 AI 味、语言精修 |
+| 读者模拟 | ReaderSim | DeepSeek | 模拟目标读者反馈 |
+| 营销专员 | MarketingSpecialist | Claude | 标题/简介/运营文案 |
 
-> 所有模型通过 [APIMart](https://apimart.ai) API聚合平台统一调用，只需一个API Key。
+> 所有模型通过 [APIMart](https://apimart.ai) API 聚合平台统一调用，只需一个 API Key。
 
 ## 项目结构
 
 ```
 novel/
 ├── src/novel_agents/      # 核心代码
-│   ├── agents/            # 6个Agent定义
-│   ├── core/              # 编排器、记忆管理、LLM网关
-│   └── tools/             # 范文检索、圣经查阅等工具
-├── bible/                 # 故事圣经（人物卡/世界观/文风）
+│   ├── agents/            # Agent 定义
+│   ├── core/              # 编排器、记忆、LLM 网关
+│   ├── server/            # FastAPI 仪表盘后端
+│   └── tools/             # 范文检索、圣经查阅等
+├── frontend/              # Next.js 仪表盘
+├── bible/                 # 故事圣经（人物/世界观/文风）
 ├── references/            # 爆款范文参考库
 ├── plans/                 # 大纲和章节规划
 ├── chapters/              # 生成的章节正文
-└── reviews/               # 审查报告
+├── reviews/               # 审查报告与 KPI
+├── start.py               # 一键启动前后端
+└── output/                # Run 产物与留痕
 ```
 
 ## 单章创作流水线
 
 ```
-策划师 → 世界观师 → 写手 → 审校师 → 润色师 → 读者模拟
-                                ↑              ↓
-                                └── 不通过则退回重写 ──┘
+卷纲 → 策划 → 节奏 → 世界观 → 写手 → 审校 → 润色 → 读者模拟 → 营销
+```
+
+## 测试与 Lint
+
+```bash
+.venv/bin/python -m pytest tests/ -v
+.venv/bin/ruff check src/ tests/
 ```
 
 ## 自定义
 
 - **添加角色**：在 `bible/characters/` 下创建 `.md` 文件
-- **添加范文**：在 `references/` 下添加 `.md` 或 `.txt` 文件，运行 `novel ingest`
+- **添加范文**：在 `references/` 下添加 `.md` 或 `.txt`，运行 `novel ingest`
 - **修改大纲**：编辑 `plans/synopsis.md`
-- **调整LLM**：修改 `src/novel_agents/core/llm_gateway.py`（可切换APIMart支持的任何模型）
+- **调整 LLM**：修改 `src/novel_agents/core/llm_gateway.py`

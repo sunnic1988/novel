@@ -44,7 +44,7 @@ def main() -> int:
                 "后端",
                 [str(BACKEND_CLI), "serve", "--port", str(args.backend_port)],
                 ROOT,
-                os.environ.copy(),
+                child_env(os.environ.copy()),
             )
         )
         processes.append(
@@ -52,7 +52,7 @@ def main() -> int:
                 "前端",
                 ["npm", "run", "dev", "--", "-p", str(args.frontend_port)],
                 FRONTEND_DIR,
-                frontend_env,
+                child_env(frontend_env),
             )
         )
 
@@ -60,20 +60,28 @@ def main() -> int:
         print(f"前端页面: http://127.0.0.1:{args.frontend_port}")
         print(f"后端 API: http://127.0.0.1:{args.backend_port}")
         print("按 Ctrl+C 可同时停止前后端。")
-        print()
+        print(flush=True)
 
         while True:
             for proc in processes:
                 code = proc.poll()
                 if code is not None:
-                    print(f"进程已退出，退出码：{code}，正在停止其它服务...")
+                    print(f"进程已退出，退出码：{code}，正在停止其它服务...", flush=True)
                     return code
             time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\n收到 Ctrl+C，正在停止前后端...")
+        print("\n收到 Ctrl+C，正在停止前后端...", flush=True)
         return 0
     finally:
         stop_processes(processes)
+
+
+def child_env(base: dict[str, str]) -> dict[str, str]:
+    """子进程使用无缓冲输出，便于实时查看日志。"""
+    env = dict(base)
+    env["PYTHONUNBUFFERED"] = "1"
+    env.setdefault("FORCE_COLOR", "1")
+    return env
 
 
 def start_process(
@@ -99,8 +107,15 @@ def start_process(
 
 def stream_output(name: str, proc: subprocess.Popen[str]) -> None:
     assert proc.stdout is not None
-    for line in proc.stdout:
-        print(f"[{name}] {line}", end="")
+    while True:
+        line = proc.stdout.readline()
+        if not line:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.05)
+            continue
+        sys.stdout.write(f"[{name}] {line}")
+        sys.stdout.flush()
 
 
 def stop_processes(processes: list[subprocess.Popen[str]]) -> None:
@@ -125,7 +140,11 @@ def stop_processes(processes: list[subprocess.Popen[str]]) -> None:
 def warn_if_api_key_missing() -> None:
     env_file = ROOT / ".env"
     if not env_file.exists():
-        print("提示：未找到 .env，Live 模式不会生效；Mock 模式仍可运行。")
+        print(
+            "提示：未找到 .env。请复制 .env.example 并配置 APIMART_API_KEY，"
+            "否则仪表盘无法启动章节流水线。",
+            flush=True,
+        )
         return
 
     api_key = ""
@@ -135,7 +154,11 @@ def warn_if_api_key_missing() -> None:
             break
 
     if not api_key or api_key == "your-apimart-api-key-here":
-        print("提示：.env 中还没有有效 APIMART_API_KEY，页面会默认使用 Mock 模式。")
+        print(
+            "提示：.env 中还没有有效的 APIMART_API_KEY，"
+            "仪表盘创作流水线将无法调用 LLM。",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

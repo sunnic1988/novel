@@ -144,7 +144,7 @@ class RunSummary(BaseModel):
     script_name: str = "默认剧本"
     chapter_num: int
     chapter_title: str
-    mode: Literal["live", "mock"] = "mock"
+    mode: Literal["live"] = "live"
     status: Literal["queued", "running", "paused", "completed", "aborted", "error"] = "queued"
     auto_run: bool = True
     created_at: int = Field(default_factory=now_ms)
@@ -176,7 +176,7 @@ class StartRunRequest(BaseModel):
     chapter_title: str = ""
     auto_run: bool = True
     step_confirm_mode: bool | None = None
-    mode: Literal["live", "mock"] = "mock"
+    mode: Literal["live"] = "live"
     synopsis_override: str = ""
     is_opening: bool = False
     best_of_n: int = 1

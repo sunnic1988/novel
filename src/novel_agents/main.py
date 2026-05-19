@@ -151,6 +151,79 @@ def serve(host: str, port: int, reload: bool):
         uvicorn.run(create_app(), host=host, port=port)
 
 
+def _write_if_missing(path: Path, content: str) -> bool:
+    if path.exists():
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content.strip() + "\n", encoding="utf-8")
+    return True
+
+
+def _init_template_files() -> list[str]:
+    created: list[str] = []
+    templates: dict[str, str] = {
+        "bible/style_guide.md": """# 文风指南
+
+## 禁止 AI 八股
+
+- 禁止滥用：然而、与此同时、事实上、总之、不禁、缓缓、微微
+- 禁止空洞升华：「他意识到」「这意味着」「这一刻他明白了」
+- 禁止形容词堆砌，优先精准动词
+
+## 节奏
+
+- Show, don't tell
+- 对话推动情节，少用大段心理独白代替行动
+""",
+        "bible/power_system.md": """# 力量体系
+
+## 境界（由低到高）
+
+1. **练气期**（一至九层）— 引气入体
+2. **筑基期** — 筑就道基
+3. **金丹期** — 凝结金丹
+4. **元婴期** — 元婴出窍
+5. **化神期** — 神识化形
+
+## 战力原则
+
+- 越级战斗需有代价或金手指支撑
+- 突破名场面要详写，日常修炼可略写
+""",
+        "bible/characters/主角模板.md": """# 主角人物卡
+
+- **姓名**：陈尘（可改）
+- **身份**：宗门杂役 / 外门弟子
+- **当前境界**：练气三层
+- **性格**：隐忍、记仇、谋定后动
+- **核心动机**：为师兄复仇 / 重回巅峰
+- **金手指**：（待填）
+- **说话方式**：少言、短句，危机时反而更冷静
+""",
+        "plans/synopsis.md": """# 故事大纲
+
+## 一句话梗概
+
+（例：重生剑帝回到十六岁杂役之身，从被瞧不起开始杀回血衣楼。）
+
+## 第一卷目标
+
+- 第 1–3 章：开篇钩子 + 金手指亮相
+- 第 4–10 章：（待填）
+
+## 主要矛盾
+
+- 外部：血衣楼 / 宗门压迫
+- 内部：复仇与隐忍的拉扯
+""",
+    }
+    for rel, text in templates.items():
+        path = PROJECT_ROOT / rel
+        if _write_if_missing(path, text):
+            created.append(rel)
+    return created
+
+
 @cli.command()
 def init():
     """初始化项目（创建必要目录和模板文件）"""
@@ -169,13 +242,16 @@ def init():
         p.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]  ✅ {d}/[/]")
 
+    for rel in _init_template_files():
+        console.print(f"[green]  ✅ {rel}[/]")
+
     console.print("\n[bold green]项目初始化完成！[/]")
     console.print("[cyan]下一步：[/]")
     console.print("  1. 在 .env 中配置 APIMART_API_KEY（从 https://apimart.ai/keys 获取）")
     console.print("  2. 编辑 plans/synopsis.md 填写故事大纲")
-    console.print("  3. 在 bible/characters/ 中添加角色卡片")
+    console.print("  3. 在 bible/characters/ 中完善角色卡片")
     console.print("  4. 运行 novel ingest 导入参考范文")
-    console.print("  5. 运行 novel write 1 -t '第一章标题' 开始创作")
+    console.print("  5. 运行 novel write 1 -t '第一章标题' 开始创作，或 python start.py 打开仪表盘")
 
 
 if __name__ == "__main__":

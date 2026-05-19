@@ -42,8 +42,9 @@ from novel_agents.book.paths import (
     seed_script_from_default,
     use_script,
 )
-from novel_agents.server.events import bus
 from novel_agents.core.llm_gateway import stream_outline_chat
+from novel_agents.server import storage_sqlite
+from novel_agents.server.events import bus
 from novel_agents.server.models import (
     AGENT_META,
     AGENT_ORDER,
@@ -59,7 +60,6 @@ from novel_agents.server.models import (
     SynopsisRequest,
 )
 from novel_agents.server.runner import manager
-from novel_agents.server import storage_sqlite
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 RUN_ARCHIVES_DIR = PROJECT_ROOT / "output" / "runs"
@@ -135,8 +135,6 @@ def create_app() -> FastAPI:
     async def create_run(req: StartRunRequest) -> dict[str, Any]:
         import os
 
-        if req.mode != "live":
-            raise HTTPException(400, "mock mode has been removed")
         if not os.getenv("APIMART_API_KEY"):
             raise HTTPException(400, "APIMART_API_KEY is required for live mode")
         script = storage_sqlite.get_script(req.script_id)
